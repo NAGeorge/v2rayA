@@ -7,10 +7,10 @@ import (
 	"github.com/v2rayA/v2rayA/common"
 	"github.com/v2rayA/v2rayA/common/errors"
 	"github.com/v2rayA/v2rayA/common/httpClient"
-	"github.com/v2rayA/v2rayA/core/nodeData"
 	"github.com/v2rayA/v2rayA/core/touch"
 	"github.com/v2rayA/v2rayA/core/vmessInfo"
 	"github.com/v2rayA/v2rayA/db/configure"
+	"github.com/v2rayA/v2rayA/infra/nodeData"
 	"log"
 	"net/http"
 	"strconv"
@@ -113,6 +113,9 @@ func ResolveSubscriptionWithClient(source string, client *http.Client) (infos []
 	if err != nil {
 		raw, _ = common.Base64URLDecode(buf.String())
 	}
+	return ResolveLines(raw)
+}
+func ResolveLines(raw string) (infos []*nodeData.NodeData, status string, err error) {
 	var sip SIP008
 	if infos, sip, err = resolveSIP008(raw); err == nil {
 		if sip.BytesUsed != 0 {

@@ -23,7 +23,7 @@ export default {
     newVersion: "Detected new version: {version}",
     messages: [
       "There is no server.",
-      "You can create a server or import a subscription. Vmess, SS and SSR are supported."
+      "You can create/import a server or import a subscription."
     ]
   },
   v2ray: {
@@ -51,6 +51,7 @@ export default {
     delete: "Delete",
     create: "Create",
     import: "Import",
+    inBatch: "In batch",
     connect: "Connect",
     disconnect: "Disconnect",
     login: "Login",
@@ -82,15 +83,15 @@ export default {
   },
   setting: {
     transparentProxy: "Transparent Proxy",
+    transparentType: "Transparent Proxy Implementation",
     pacMode: "Traffic Splitting Mode of Rule Port",
     preventDnsSpoofing: "Prevent DNS Spoofing",
+    specialMode: "Special Mode",
     mux: "Multiplex",
     autoUpdateSub: "Automatically Update Subscriptions",
     autoUpdateGfwlist: "Automatically Update GFWList",
     preferModeWhenUpdate: "Mode when Upadate Subscriptions and GFWList",
     ipForwardOn: "Share in LAN",
-    enhancedModeOn: "Enhanced",
-    dnsForceModeOn: "Disable CDS",
     concurrency: "Concurrency",
     options: {
       global: "Proxy All Traffic",
@@ -111,20 +112,22 @@ export default {
       updateGfwlistWhenStart: "Update GFWList When Service Starts",
       updateGfwlistAtIntervals: "Update GFWList Regularly (Unit: hour)",
       dependTransparentMode: "Depend on Transparent Proxy",
-      closed: "Off"
+      closed: "Off",
+      advanced: "Advanced Setting"
     },
     messages: {
       gfwlist:
         "Based on modified time of file which sometimes is after latest version online.",
       transparentProxy:
-        "If transparent proxy on, no extra configure needed and all TCP traffic will pass through the v2rayA. Providing proxy service to other computers as the gateway should make option 'Share in LAN' on.",
+        "If transparent proxy on, no extra configure needed and all TCP traffic will pass through the v2rayA. Providing proxy service to other computers and docker as the gateway should make option 'Share in LAN' on.",
+      transparentType:
+        "★tproxy: UDP supported, but egress whitelist should be confirmed manually. ★redirect: friendly for docker, but does not support UDP and need to occupy local port 53 for dns anti-pollution.",
       pacMode: `Here you can set the splitting traffic rule of rule port. By default, "Rule of Splitting Traffic" port is 20172 and HTTP protocol.`,
       preventDnsSpoofing:
-        "If there is a problem with transparent proxy, try setting 'Prevent DNS Spoofing' as 'Off' or turn on 'Enhanced Mode' (v0.7.0.2+)." +
         "★Forward DNS Request: DNS requests will be forwarded by proxy server." +
-        "★DoH(dns-over-https, v2ray-core: 4.22.0+): Stable and fast DoH services are suggested." +
-        "★Enhanced Mode(v0.7.0.2+) faster but not support udp and ipv6" +
-        "★Disable CDS(v1.1.3+, Disable China Domain Shunt): Do not shunt DNS query of China Domains",
+        "★DoH(dns-over-https, v2ray-core: 4.22.0+): DNS over HTTPS.",
+      specialMode:
+        "★supervisor：Monitor dns pollution, intercept in advance, use sniffing mechanism of v2ray-core to prevent pollution. ★fakedns：Use the fakens strategy to speed up the resolving, and it needs to occupy the local port 53.",
       tcpFastOpen:
         "Simplify TCP handshake process to speed up connection establishment. Risk of emphasizing characteristics of packets exists. It may cause failed to connect if your system does not support it.",
       mux:
@@ -184,11 +187,11 @@ export default {
   },
   dns: {
     title: "Configure DNS Server",
-    dnsPriorityList: "Priority list of DNS Servers",
+    internalQueryServers: "Domain Query Servers",
+    externalQueryServers: "External Domain Query Servers",
     messages: [
-      "In the 'Prevent DNS Hijack Only' mode, the list is just the DNS configuration. In other modes, the first item in the list is the DNS server for querying Chinese mainland addresses.",
-      "Please fill in the IP or domain of the DNS server (without port) in the list. Ports other than 53 are not supported.",
-      "Optimally, place exact two lines above. The list will restore to default after saving with empty content."
+      '"@:(dns.internalQueryServers)" are designed to be used to look up domain names in China, while "@:(dns.externalQueryServers)" be used to look up others.',
+      '"@:(dns.internalQueryServers)" will be used to look up all domain names if "@:(dns.externalQueryServers)" is empty.'
     ]
   },
   egressPortWhitelist: {
@@ -226,6 +229,7 @@ export default {
   },
   import: {
     message: "Input a server link or subscription address:",
+    batchMessage: "One server link per line:",
     qrcodeError: "Failed to find a valid QRCode, please try again"
   },
   delete: {

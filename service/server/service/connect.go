@@ -2,17 +2,18 @@ package service
 
 import (
 	"github.com/v2rayA/v2rayA/core/ipforward"
+	"github.com/v2rayA/v2rayA/core/specialMode"
 	"github.com/v2rayA/v2rayA/core/v2ray"
-	"github.com/v2rayA/v2rayA/core/v2ray/asset/gfwlist"
+	"github.com/v2rayA/v2rayA/core/v2ray/asset"
 	"github.com/v2rayA/v2rayA/db/configure"
 	"github.com/v2rayA/v2rayA/plugin"
 	"log"
-	"net"
 	"os"
 )
 
 func Disconnect() (err error) {
 	plugin.GlobalPlugins.CloseAll()
+	specialMode.StopDNSSupervisor()
 	err = v2ray.StopV2rayService()
 	if err != nil {
 		return
@@ -26,8 +27,8 @@ func Disconnect() (err error) {
 
 func checkAssetsExist(setting *configure.Setting) error {
 	//FIXME: non-fully check
-	if setting.PacMode == configure.GfwlistMode || setting.Transparent == configure.TransparentGfwlist {
-		if !gfwlist.LoyalsoldierSiteDatExists() {
+	if setting.RulePortMode == configure.GfwlistMode || setting.Transparent == configure.TransparentGfwlist {
+		if !asset.LoyalsoldierSiteDatExists() {
 			return newError("GFWList file not exists. Try updating GFWList please")
 		}
 	}
@@ -37,29 +38,12 @@ func checkAssetsExist(setting *configure.Setting) error {
 const resolvConf = "/etc/resolv.conf"
 
 func writeResolvConf() {
-	os.WriteFile(resolvConf, []byte("nameserver 223.5.5.5"), 0644)
+	os.WriteFile(resolvConf, []byte("nameserver 223.6.6.6"), 0644)
 }
 
 func checkResolvConf() {
 	if _, err := os.Stat(resolvConf); os.IsNotExist(err) {
 		writeResolvConf()
-	} else {
-		errCnt := 0
-		maxTry := 2
-		for {
-			addrs, err := net.LookupHost("apple.com")
-			if len(addrs) == 0 || err != nil {
-				errCnt++
-				if errCnt <= maxTry {
-					continue
-				}
-			}
-			break
-		}
-		if errCnt >= maxTry {
-			log.Println("[warning] There may be no network or dns manager conflicting with v2rayA. If problems occur, paste your file /etc/resolv.conf for help.")
-			writeResolvConf()
-		}
 	}
 }
 
@@ -76,9 +60,9 @@ func Connect(which *configure.Which) (err error) {
 	checkResolvConf()
 	//配置ip转发
 	if setting.IntranetSharing != ipforward.IsIpForwardOn() {
-		err = ipforward.WriteIpForward(setting.IntranetSharing)
-		if err != nil {
-			return
+		e := ipforward.WriteIpForward(setting.IntranetSharing)
+		if e != nil {
+			log.Println("[warning]", e)
 		}
 	}
 	//定位Server

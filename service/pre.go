@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"github.com/gookit/color"
@@ -8,7 +9,6 @@ import (
 	jsonIteratorExtra "github.com/json-iterator/go/extra"
 	"github.com/tidwall/gjson"
 	"github.com/v2rayA/v2rayA/common/netTools/ports"
-	"github.com/v2rayA/v2rayA/core/iptables"
 	"github.com/v2rayA/v2rayA/core/v2ray"
 	"github.com/v2rayA/v2rayA/core/v2ray/asset"
 	"github.com/v2rayA/v2rayA/core/v2ray/asset/gfwlist"
@@ -26,9 +26,7 @@ import (
 	"os"
 	"os/signal"
 	"path"
-	"regexp"
 	"runtime"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -73,27 +71,8 @@ func checkEnvironment() {
 func checkTProxySupportability() {
 	//检查tproxy是否可以启用
 	if err := v2ray.CheckAndProbeTProxy(); err != nil {
-		log.Println("[INFO] Cannot load TPROXY module:", err, ". Switch to DNSPoison module")
+		log.Println("[INFO] Cannot load TPROXY module:", err)
 	}
-	v2ray.CheckAndStopTransparentProxy()
-	preprocess := func(c *iptables.SetupCommands) {
-		commands := string(*c)
-		lines := strings.Split(commands, "\n")
-		reg := regexp.MustCompile(`{{.+}}`)
-		for i, line := range lines {
-			if len(reg.FindString(line)) > 0 {
-				lines[i] = ""
-			}
-		}
-		commands = strings.Join(lines, "\n")
-		*c = iptables.SetupCommands(commands)
-	}
-	err := iptables.Tproxy.GetSetupCommands().Setup(&preprocess)
-	if err != nil {
-		log.Println(err)
-		global.SupportTproxy = false
-	}
-	iptables.Tproxy.GetCleanCommands().Clean()
 }
 
 func migrate(jsonConfPath string) (err error) {
@@ -258,16 +237,26 @@ func initUpdatingTicker() {
 func checkUpdate() {
 	setting := service.GetSetting()
 	//等待网络连通
+	resolver := net.Resolver{
+		PreferGo:     true,
+		StrictErrors: false,
+		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+			d := net.Dialer{}
+			address = "114.114.114.114:53"
+			return d.DialContext(ctx, network, address)
+		},
+	}
 	for {
 		c := http.DefaultClient
 		c.Timeout = 5 * time.Second
-		resp, err := http.Get("http://www.gstatic.com/generate_204")
-		if err == nil {
-			_ = resp.Body.Close()
+		addrs, err := resolver.LookupHost(context.Background(), "apple.com")
+		if err == nil && len(addrs) > 0 {
 			break
 		}
+		log.Println("[info] waiting for network connected")
 		time.Sleep(c.Timeout)
 	}
+	log.Println("[info] network is connected")
 
 	//初始化ticker
 	initUpdatingTicker()
@@ -279,7 +268,7 @@ func checkUpdate() {
 		if setting.GFWListAutoUpdateMode == configure.AutoUpdateAtIntervals {
 			global.TickerUpdateGFWList.Reset(time.Duration(setting.GFWListAutoUpdateIntervalHour) * time.Hour)
 		}
-		switch setting.PacMode {
+		switch setting.RulePortMode {
 		case configure.GfwlistMode:
 			go func() {
 				/* 更新LoyalsoldierSite.dat */
@@ -291,7 +280,7 @@ func checkUpdate() {
 				log.Println("Complete updating PAC file. Localtime: " + localGFWListVersion)
 			}()
 		case configure.CustomMode:
-			//TODO
+			// obsolete
 		}
 	}
 

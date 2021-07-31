@@ -7,12 +7,14 @@ import (
 	"github.com/v2rayA/routingA"
 	"github.com/v2rayA/v2rayA/common"
 	"github.com/v2rayA/v2rayA/common/netTools/ports"
-	"github.com/v2rayA/v2rayA/core/dnsPoison/entity"
+	"github.com/v2rayA/v2rayA/core/iptables"
+	"github.com/v2rayA/v2rayA/core/specialMode"
 	"github.com/v2rayA/v2rayA/core/v2ray/asset"
 	"github.com/v2rayA/v2rayA/core/v2ray/where"
 	"github.com/v2rayA/v2rayA/core/vmessInfo"
 	"github.com/v2rayA/v2rayA/db/configure"
 	"github.com/v2rayA/v2rayA/global"
+	dnsParser2 "github.com/v2rayA/v2rayA/infra/dnsParser"
 	"log"
 	"net"
 	"net/url"
@@ -22,11 +24,6 @@ import (
 	"strconv"
 	"strings"
 )
-
-var DirectRuleDomains = []string{
-	"full:v2raya.mzz.pub",
-	"full:v.mzz.pub",
-}
 
 /*对应template.json*/
 type TmplJson struct {
@@ -236,17 +233,21 @@ type HttpSettings struct {
 	Path string   `json:"path"`
 	Host []string `json:"host"`
 }
-type Hosts map[string]string
+type Hosts map[string]interface{}
 
 type DNS struct {
-	Hosts    Hosts         `json:"hosts,omitempty"`
-	Servers  []interface{} `json:"servers"`
-	ClientIp string        `json:"clientIp,omitempty"`
+	Hosts           Hosts         `json:"hosts,omitempty"`
+	Servers         []interface{} `json:"servers"`
+	ClientIp        string        `json:"clientIp,omitempty"`
+	Tag             string        `json:"tag,omitempty"`
+	DisableFallback *bool         `json:"disableFallback,omitempty"`
+	QueryStrategy   string        `json:"queryStrategy,omitempty"`
 }
 type DnsServer struct {
-	Address string   `json:"address"`
-	Port    int      `json:"port"`
-	Domains []string `json:"domains,omitempty"`
+	Address      string   `json:"address"`
+	Port         int      `json:"port,omitempty"`
+	Domains      []string `json:"domains,omitempty"`
+	SkipFallback bool     `json:"skipFallback,omitempty"`
 }
 type Policy struct {
 	Levels struct {
@@ -489,189 +490,311 @@ func ResolveOutbound(v *vmessInfo.VmessInfo, tag string, pluginPort *int) (o Out
 	return
 }
 
-func (t *Template) SetDNS(v vmessInfo.VmessInfo, supportUDP bool, setting *configure.Setting) (dohIPs, dohDomains []string) {
-	//先修改DNS设置
-	dnslist := configure.GetDnsListNotNil()
-	t.DNS = new(DNS)
-	switch setting.AntiPollution {
-	case configure.DoH:
-		//添加DoH服务器
-		s := *configure.GetDohListNotNil()
-		dohs := strings.Split(strings.TrimSpace(s), "\n")
-		for _, doh := range dohs {
-			//使用DOHL模式，默认绕过routing和outbound以加快DOH速度
-			doh = strings.Replace(doh, "https://", "https+local://", 1)
-			t.DNS.Servers = append(t.DNS.Servers, doh)
+type Addr struct {
+	host string
+	port string
+}
+
+func parseDnsAddr(addr string) Addr {
+	// 223.5.5.5
+	if net.ParseIP(addr) != nil {
+		return Addr{
+			host: addr,
+			port: "53",
 		}
-	case configure.AntipollutionNone:
-		for _, dns := range dnslist {
-			t.DNS.Servers = append(t.DNS.Servers, dns) //防止DNS劫持
+	}
+	// dns.google:53
+	if host, port, err := net.SplitHostPort(addr); err == nil {
+		if _, err = strconv.Atoi(port); err == nil {
+			return Addr{
+				host: host,
+				port: port,
+			}
 		}
-	case configure.DnsForward:
-		if supportUDP {
-			t.DNS.Servers = []interface{}{
-				DnsServer{
-					Address: "8.8.8.8",
-					Port:    53,
-				},
+	}
+	// tcp://8.8.8.8:53, https://dns.google/dns-query
+	if u, err := url.Parse(addr); err == nil {
+		return Addr{
+			host: u.Hostname(),
+			port: u.Port(),
+		}
+	}
+	// dns.google, dns.pub, etc.
+	return Addr{
+		host: addr,
+		port: "53",
+	}
+}
+
+type DnsRouting struct {
+	DirectDomains []Addr
+	ProxyDomains  []Addr
+	DirectIPs     []Addr
+	ProxyIPs      []Addr
+}
+
+func appendDnsServers(d *DNS, lines []string, domains []string) {
+	for _, line := range lines {
+		dns := dnsParser2.Parse(line)
+		if u, err := url.Parse(dns.Val); err == nil && strings.Contains(dns.Val, "://") && !strings.Contains(u.Scheme, "://") {
+			log.Println(u, u.Scheme, u.Host, u.Path)
+			if domains != nil {
+				d.Servers = append(d.Servers, DnsServer{
+					Address: dns.Val,
+					Domains: domains,
+				})
+			} else {
+				d.Servers = append(d.Servers, dns.Val)
 			}
 		} else {
-			//由于plugin不支持udp
-			//先优先请求DoH（tcp）
-			if err := CheckDohSupported(""); err == nil {
-				//DNS转发，所以使用全球友好的DNS服务器
-				t.DNS.Servers = []interface{}{
-					"https://1.1.1.1/dns-query",
-					"https://8.8.8.8/dns-query",
-				}
-			}
-			if len(t.DNS.Servers) <= 0 {
-				//否则使用openDNS非标准端口直连5353
-				t.DNS.Servers = []interface{}{
-					DnsServer{
-						Address: "208.67.220.220",
-						Port:    5353,
-					},
-				}
-			}
+			addr := parseDnsAddr(dns.Val)
+			p, _ := strconv.Atoi(addr.port)
+			d.Servers = append(d.Servers, DnsServer{
+				Address: addr.host,
+				Port:    p,
+				Domains: domains,
+			})
 		}
 	}
-	if setting.AntiPollution != configure.AntipollutionNone {
-		//统计DoH服务器信息
-		dohIPs = make([]string, 0)
-		dohDomains = make([]string, 0)
-		for _, u := range t.DNS.Servers {
-			switch u := u.(type) {
-			case string:
-				if !strings.HasPrefix(strings.ToLower(u), "https://") &&
-					!strings.HasPrefix(strings.ToLower(u), "https+local://") {
+}
+
+func (t *Template) SetDNS(v vmessInfo.VmessInfo, setting *configure.Setting, supportUDP bool) (routing DnsRouting, err error) {
+	// TODO: other countries and regions
+	var internal, external []string
+	var allThroughProxy = false
+	if setting.AntiPollution == configure.AntipollutionAdvanced {
+		// advanced
+		internal = configure.GetInternalDnsListNotNil()
+		external = configure.GetExternalDnsListNotNil()
+		if len(external) == 0 {
+			allThroughProxy = true
+			for _, line := range internal {
+				dns := dnsParser2.Parse(line)
+				if dns.Out != "proxy" {
+					allThroughProxy = false
 					break
 				}
-				uu, e := url.Parse(u)
-				if e != nil {
-					continue
+			}
+		}
+		// check UDP support
+		for _, line := range external {
+			dns := dnsParser2.Parse(line)
+			if dns.Out == "proxy" {
+				if net.ParseIP(dns.Val) != nil {
+					return DnsRouting{}, fmt.Errorf("sorry, your DNS setting may be invalid, because UDP is not supported for %v yet by v2rayA. Please use tcp:// or doh:// instead.", v.Protocol)
 				}
-				//如果是非IP则解析为IP
-				if net.ParseIP(uu.Hostname()) == nil {
-					dohDomains = append(dohDomains, uu.Hostname())
-					addrs, e := net.LookupHost(uu.Hostname())
-					if e != nil {
-						log.Println("net.LookupHost:", e)
-						continue
+				if _, port, err := net.SplitHostPort(dns.Val); err == nil {
+					if _, err := strconv.Atoi(port); err == nil {
+						return DnsRouting{}, fmt.Errorf("sorry, your DNS setting may be invalid, because UDP is not supported for %v yet by v2rayA. Please use tcp:// or doh:// instead.", v.Protocol)
 					}
-					dohIPs = append(dohIPs, addrs...)
-				} else {
-					dohIPs = append(dohIPs, uu.Hostname())
 				}
 			}
 		}
+	} else if setting.AntiPollution != configure.AntipollutionClosed {
+		// preset
+		internal = []string{"223.6.6.6 -> direct", "114.114.114.114 -> direct"}
+		switch setting.AntiPollution {
+		case configure.AntipollutionAntiHijack:
+			break
+		case configure.AntipollutionDnsForward:
+			if supportUDP {
+				external = []string{"8.8.8.8 -> proxy", "1.1.1.1 -> proxy"}
+			} else {
+				if err := CheckTcpDnsSupported(); err == nil {
+					external = []string{"tcp://dns.opendns.com:5353 -> proxy", "tcp://dns.google -> proxy"}
+				} else if err = CheckDohSupported(); err == nil {
+					external = []string{"https://1.1.1.1/dns-query -> proxy", "https://dns.google/dns-query -> proxy"}
+				} else {
+					// compromise
+					external = []string{"208.67.220.220:5353 -> direct", "208.67.222.222 -> direct"}
+				}
+			}
+		case configure.AntipollutionDoH:
+			external = []string{"https://doh.pub/dns-query -> direct", "https://rubyfish.cn/dns-query -> direct"}
+		}
+	}
+	True := true
+	t.DNS = &DNS{
+		Tag: "dns",
+	}
+	if allThroughProxy {
+		// guess the user want to protect the privacy
+		t.DNS.DisableFallback = &True
+	}
+	if setting.AntiPollution != configure.AntipollutionClosed {
+		if len(external) == 0 {
+			// not split traffic
+			appendDnsServers(t.DNS, internal, nil)
+		} else {
+			// split traffic
+			appendDnsServers(t.DNS, external, nil)
+			appendDnsServers(t.DNS, internal, []string{"geosite:cn"})
+		}
+	}
+	// routing
+	dnsList := append(append([]string{}, internal...), external...)
+	for _, line := range dnsList {
+		dns := dnsParser2.Parse(line)
+		if dns.Val == "localhost" {
+			// no need to routing
+			continue
+		}
+		// we believe all lines are legal
+		var addr = parseDnsAddr(dns.Val)
 
+		if dns.Out == "direct" {
+			if net.ParseIP(addr.host) == nil {
+				routing.DirectDomains = append(routing.DirectDomains, addr)
+			} else {
+				routing.DirectIPs = append(routing.DirectIPs, addr)
+			}
+		} else {
+			if net.ParseIP(addr.host) == nil {
+				routing.ProxyDomains = append(routing.ProxyDomains, addr)
+			} else {
+				routing.ProxyIPs = append(routing.ProxyIPs, addr)
+			}
+		}
+	}
+
+	// fakedns
+	if t.FakeDns != nil {
 		ds := DnsServer{
-			Address: dnslist[0],
-			Port:    53,
+			Address: "fakedns",
 			Domains: []string{
-				"domain:ntp.org", // NTP 服务器
+				"domain:use-fakedns.com",
 			},
 		}
-		if !setting.DnsForceMode {
-			ds.Domains = append(ds.Domains, "geosite:cn") // 国内网站dns分流以加速访问
+		if asset.LoyalsoldierSiteDatExists() {
+			// use more accurate list to avoid misadventure
+			ds.Domains = append(ds.Domains, "ext:LoyalsoldierSite.dat:gfw")
+		} else {
+			ds.Domains = append(ds.Domains, "geosite:geolocation-!cn")
 		}
-
-		if len(dohDomains) > 0 {
-			ds.Domains = append(ds.Domains, dohDomains...)
+		if len(t.DNS.Servers) == 0 {
+			log.Println("[Fakedns]: NOT REASONABLE. Please report your config.")
+			t.DNS.Servers = append(t.DNS.Servers, "localhost")
 		}
-		if net.ParseIP(v.Add) == nil {
-			//如果节点地址不是IP而是域名，将其加入白名单
-			ds.Domains = append(ds.Domains, v.Add)
-		}
-		t.DNS.Servers = append(t.DNS.Servers,
-			ds,
-		)
+		t.DNS.Servers = append(t.DNS.Servers, ds)
 	}
-	if t.DNS != nil {
-		//修改hosts
-		t.DNS.Hosts = getHosts()
 
-		//fakedns
-		if t.FakeDns != nil {
+	if t.DNS.Servers == nil {
+		t.DNS.Servers = []interface{}{"localhost"}
+	}
+	var domainsToLookup []string
+	if net.ParseIP(v.Add) == nil {
+		domainsToLookup = append(domainsToLookup, v.Add)
+	}
+	for _, addr := range routing.ProxyDomains {
+		domainsToLookup = append(domainsToLookup, addr.host)
+	}
+	for _, addr := range routing.DirectDomains {
+		domainsToLookup = append(domainsToLookup, addr.host)
+	}
+	var domainsToHosts []string
+	if len(domainsToLookup) > 0 {
+		if CheckDohSupported() == nil {
 			t.DNS.Servers = append(t.DNS.Servers, DnsServer{
-				Address: "fakedns",
-				Domains: []string{
-					"domain:use-fakedns.com",
-					"geosite:geolocation-!cn",
-				},
+				Address:      "https://doh.pub/dns-query",
+				Domains:      domainsToLookup,
+				SkipFallback: true,
 			})
+			t.DNS.Servers = append(t.DNS.Servers, DnsServer{
+				Address:      "https://doh.alidns.com/dns-query",
+				Domains:      domainsToLookup,
+				SkipFallback: true,
+			})
+			domainsToHosts = append(domainsToHosts, "doh.pub")
+			domainsToHosts = append(domainsToHosts, "doh.alidns.com")
+		} else {
+			t.DNS.Servers = append(t.DNS.Servers, DnsServer{
+				Address:      "dns.pub",
+				Domains:      domainsToLookup,
+				SkipFallback: true,
+			})
+			t.DNS.Servers = append(t.DNS.Servers, DnsServer{
+				Address:      "dns.alidns.com",
+				Domains:      domainsToLookup,
+				SkipFallback: true,
+			})
+			domainsToHosts = append(domainsToHosts, "dns.pub")
+			domainsToHosts = append(domainsToHosts, "dns.alidns.com")
+		}
+	}
+	// set hosts
+	for _, domain := range domainsToHosts {
+		ips, err := net.LookupHost(domain)
+		if err != nil {
+			return routing, fmt.Errorf("[Error] %w: please make sure you're connected to the Internet", err)
+		}
+		if t.DNS.Hosts == nil {
+			t.DNS.Hosts = make(Hosts)
+		}
+		ips = filterIPs(ips)
+		if CheckHostsListSupported() == nil {
+			t.DNS.Hosts[domain] = ips
+		} else {
+			t.DNS.Hosts[domain] = ips[0]
 		}
 	}
 	return
 }
-
-func (t *Template) SetDNSRouting(v vmessInfo.VmessInfo, dohIPs, dohHosts []string, setting *configure.Setting, supportUDP bool) {
-	dohRouting := make([]RoutingRule, 0)
-	if len(dohIPs) > 0 {
-		hosts := make([]string, len(dohHosts))
-		for i := range dohHosts {
-			hosts[i] = "full:" + dohHosts[i]
-		}
-		dohRouting = append(dohRouting, RoutingRule{
-			Type:        "field",
-			OutboundTag: "direct", //如果配置了dns转发，此处将被改成proxy
-			IP:          dohIPs,
-			Port:        "443",
-		}, RoutingRule{
-			Type:        "field",
-			OutboundTag: "direct", //如果配置了dns转发，此处将被改成proxy
-			Domain:      hosts,
-			Port:        "443",
-		})
+func filterIPs(ips []string) []string {
+	if iptables.IsIPv6Supported() {
+		return ips
 	}
-	if setting.AntiPollution == configure.DnsForward {
-		for i := range dohRouting {
-			dohRouting[i].OutboundTag = "proxy"
+	var ret []string
+	for _, ip := range ips {
+		if net.ParseIP(ip).To4() != nil {
+			ret = append(ret, ip)
 		}
 	}
-	if supportUDP {
+	return ret
+}
+func (t *Template) SetDNSRouting(routing DnsRouting, supportUDP bool) {
+	for _, r := range routing.DirectIPs {
 		t.Routing.Rules = append(t.Routing.Rules,
-			RoutingRule{ // 国外DNS服务器地址走代理，以防污染
-				Type:        "field",
-				OutboundTag: "proxy",
-				IP:          []string{"8.8.8.8", "1.1.1.1"},
-				Port:        "53",
-			},
+			RoutingRule{Type: "field", InboundTag: []string{"dns"}, OutboundTag: "direct", IP: []string{r.host}, Port: r.port},
+		)
+	}
+	for _, r := range routing.ProxyIPs {
+		t.Routing.Rules = append(t.Routing.Rules,
+			RoutingRule{Type: "field", InboundTag: []string{"dns"}, OutboundTag: "proxy", IP: []string{r.host}, Port: r.port},
+		)
+	}
+	for _, r := range routing.DirectDomains {
+		t.Routing.Rules = append(t.Routing.Rules,
+			RoutingRule{Type: "field", InboundTag: []string{"dns"}, OutboundTag: "direct", Domain: []string{r.host}, Port: r.port},
+		)
+	}
+	for _, r := range routing.ProxyDomains {
+		t.Routing.Rules = append(t.Routing.Rules,
+			RoutingRule{Type: "field", InboundTag: []string{"dns"}, OutboundTag: "proxy", Domain: []string{r.host}, Port: r.port},
 		)
 	}
 	t.Routing.Rules = append(t.Routing.Rules,
-		RoutingRule{ // 国内DNS服务器直连，以分流
-			Type:        "field",
-			OutboundTag: "direct",
-			IP:          configure.GetDnsListNotNil(),
-			Port:        "53",
-		},
+		RoutingRule{Type: "field", InboundTag: []string{"dns"}, OutboundTag: "direct"},
 	)
-	dnsout := RoutingRule{ // 劫持 53 端口流量，使用 V2Ray 的 DNS
-		Type:        "field",
-		Port:        "53",
-		OutboundTag: "dns-out",
-	}
-	if t.FakeDns != nil {
-		dnsout.InboundTag = []string{"dns-in"}
-	} else {
-		t.Routing.Rules = append(t.Routing.Rules,
-			RoutingRule{ // DNSPoison
-				Type:        "field",
-				IP:          []string{"240.0.0.0/4"},
-				OutboundTag: "proxy",
-			},
-		)
-	}
-	t.Routing.Rules = append(t.Routing.Rules, dnsout)
-	if setting.AntiPollution != configure.AntipollutionNone {
-		t.Routing.Rules = append(t.Routing.Rules, RoutingRule{ // 非标准端口暂时安全，直连
+	setting := configure.GetSettingNotNil()
+	if setting.AntiPollution != configure.AntipollutionClosed {
+		dnsOut := RoutingRule{ // hijack traffic to port 53
 			Type:        "field",
-			OutboundTag: "direct",
-			IP:          []string{"208.67.222.222", "208.67.220.220"},
-			Port:        "5353",
-		})
+			Port:        "53",
+			OutboundTag: "dns-out",
+		}
+		if specialMode.ShouldLocalDnsListen() && specialMode.CouldLocalDnsListen() == nil {
+			dnsOut.InboundTag = []string{"dns-in"}
+		}
+		if specialMode.ShouldUseSupervisor() {
+			t.Routing.Rules = append(t.Routing.Rules,
+				RoutingRule{ // supervisor
+					Type:        "field",
+					IP:          []string{"240.0.0.0/4"},
+					OutboundTag: "proxy",
+				},
+			)
+		}
+		t.Routing.Rules = append(t.Routing.Rules, dnsOut)
 	}
 	if !supportUDP {
 		t.Routing.Rules = append(t.Routing.Rules,
@@ -682,24 +805,23 @@ func (t *Template) SetDNSRouting(v vmessInfo.VmessInfo, dohIPs, dohHosts []strin
 			},
 		)
 	}
-	t.Routing.Rules = append(t.Routing.Rules, dohRouting...)
 	return
 }
 
-func (t *Template) SetPacRouting(setting *configure.Setting) error {
-	switch setting.PacMode {
+func (t *Template) SetRulePortRouting(setting *configure.Setting) error {
+	switch setting.RulePortMode {
 	case configure.WhitelistMode:
 		t.Routing.Rules = append(t.Routing.Rules,
 			RoutingRule{ // 直连中国大陆主流网站域名
 				Type:        "field",
 				OutboundTag: "direct",
-				InboundTag:  []string{"pac"},
+				InboundTag:  []string{"rule"},
 				Domain:      []string{"geosite:cn"},
 			},
 			RoutingRule{ // 直连中国大陆主流网站 ip 和 私有 ip
 				Type:        "field",
 				OutboundTag: "direct",
-				InboundTag:  []string{"pac"},
+				InboundTag:  []string{"rule"},
 				IP:          []string{"geoip:private", "geoip:cn"},
 			},
 		)
@@ -708,13 +830,13 @@ func (t *Template) SetPacRouting(setting *configure.Setting) error {
 			RoutingRule{
 				Type:        "field",
 				OutboundTag: "proxy",
-				InboundTag:  []string{"pac"},
+				InboundTag:  []string{"rule"},
 				Domain:      []string{"ext:LoyalsoldierSite.dat:geolocation-!cn"},
 			},
 			RoutingRule{
 				Type:        "field",
 				OutboundTag: "direct",
-				InboundTag:  []string{"pac"},
+				InboundTag:  []string{"rule"},
 			},
 		)
 	case configure.CustomMode:
@@ -732,7 +854,7 @@ func (t *Template) SetPacRouting(setting *configure.Setting) error {
 				rule = &RoutingRule{
 					Type:        "field",
 					OutboundTag: string(v.RuleType),
-					InboundTag:  []string{"pac"},
+					InboundTag:  []string{"rule"},
 				}
 			}
 			for i := range v.Tags {
@@ -757,18 +879,18 @@ func (t *Template) SetPacRouting(setting *configure.Setting) error {
 			t.Routing.Rules = append(t.Routing.Rules, RoutingRule{
 				Type:        "field",
 				OutboundTag: "direct",
-				InboundTag:  []string{"pac"},
+				InboundTag:  []string{"rule"},
 			})
 		case configure.DefaultBlockMode:
 			//如果默认拦截，则需要加上下述规则
 			t.Routing.Rules = append(t.Routing.Rules, RoutingRule{
 				Type:        "field",
 				OutboundTag: "block",
-				InboundTag:  []string{"pac"},
+				InboundTag:  []string{"rule"},
 			})
 		}
 	case configure.RoutingAMode:
-		if err := parseRoutingA(t, []string{"pac"}); err != nil {
+		if err := parseRoutingA(t, []string{"rule"}); err != nil {
 			return err
 		}
 	}
@@ -948,7 +1070,7 @@ func parseRoutingA(t *Template, routingInboundTags []string) error {
 	t.Routing.Rules = append(t.Routing.Rules, RoutingRule{
 		Type:        "field",
 		OutboundTag: defaultOutbound,
-		InboundTag:  []string{"pac"},
+		InboundTag:  []string{"rule"},
 	})
 	return nil
 }
@@ -989,7 +1111,7 @@ func (t *Template) SetTransparentRouting(setting *configure.Setting) {
 		for i := range t.Routing.Rules {
 			bIncludePac := false
 			for _, in := range t.Routing.Rules[i].InboundTag {
-				if in == "pac" {
+				if in == "rule" {
 					bIncludePac = true
 					break
 				}
@@ -1002,7 +1124,7 @@ func (t *Template) SetTransparentRouting(setting *configure.Setting) {
 }
 func (t *Template) AppendDokodemo(tproxy *string, port int, tag string) {
 	dokodemo := Inbound{
-		Listen:   "::",
+		Listen:   "0.0.0.0",
 		Port:     port,
 		Protocol: "dokodemo-door",
 		Sniffing: Sniffing{
@@ -1044,11 +1166,39 @@ func (t *Template) SetOutboundSockopt(supportUDP bool, setting *configure.Settin
 	}
 }
 func (t *Template) SetInboundListenAddress(setting *configure.Setting) {
-	if setting.IntranetSharing {
-		return
-	}
-	for i := range t.Inbounds {
-		t.Inbounds[i].Listen = "127.0.0.1"
+	const (
+		tag4Suffix = "_ipv4"
+		tag6Suffix = "_ipv6"
+	)
+	tagMap := make(map[string]struct{})
+	inbounds6 := make([]Inbound, len(t.Inbounds))
+	copy(inbounds6, t.Inbounds)
+	if !setting.IntranetSharing {
+		// copy a group of ipv6 inbounds and set the tag
+		for i := range t.Inbounds {
+			t.Inbounds[i].Listen = "127.0.0.1"
+			inbounds6[i].Listen = "::1"
+			if t.Inbounds[i].Tag != "" {
+				tagMap[t.Inbounds[i].Tag] = struct{}{}
+				t.Inbounds[i].Tag += tag4Suffix
+				inbounds6[i].Tag += tag6Suffix
+			}
+		}
+		t.Inbounds = append(t.Inbounds, inbounds6...)
+
+		// set routing
+		for i := range t.Routing.Rules {
+			tag6 := make([]string, 0)
+			for j, tag := range t.Routing.Rules[i].InboundTag {
+				if _, ok := tagMap[tag]; ok {
+					t.Routing.Rules[i].InboundTag[j] += tag4Suffix
+					tag6 = append(tag6, tag+tag6Suffix)
+				}
+			}
+			if len(tag6) > 0 {
+				t.Routing.Rules[i].InboundTag = append(t.Routing.Rules[i].InboundTag, tag6...)
+			}
+		}
 	}
 }
 func (t *Template) SetInboundFakeDnsDestOverride() {
@@ -1086,18 +1236,18 @@ func (t *Template) SetInbound(setting *configure.Setting) {
 	}
 	if setting.Transparent != configure.TransparentClose {
 		var tproxy string
-		if global.SupportTproxy && !setting.EnhancedMode {
-			tproxy = "tproxy"
-		} else {
-			tproxy = "redirect"
+		switch setting.TransparentType {
+		case configure.TransparentTproxy, configure.TransparentRedirect:
+			tproxy = string(setting.TransparentType)
 		}
 		t.AppendDokodemo(&tproxy, 32345, "transparent")
 	}
-	if t.FakeDns != nil {
+	if specialMode.ShouldLocalDnsListen() && specialMode.CouldLocalDnsListen() == nil {
+		// FIXME: xray cannot use fakedns+others (2021-07-17), set up a solo dokodemo-door for fakedns
 		t.Inbounds = append(t.Inbounds, Inbound{
 			Port:     53,
 			Protocol: "dokodemo-door",
-			Listen:   "::",
+			Listen:   "0.0.0.0",
 			Settings: &InboundSettings{
 				Network: "udp",
 				Address: "2.0.1.7",
@@ -1108,48 +1258,14 @@ func (t *Template) SetInbound(setting *configure.Setting) {
 	}
 }
 
-func (t *Template) SetDirectRuleRouting(v vmessInfo.VmessInfo) (serverIPs []string, serverDomain string) {
-	serverIPs = []string{v.Add}
-	if net.ParseIP(v.Add) == nil {
-		//如果不是IP，而是域名，将其加入白名单
-		t.Routing.Rules = append([]RoutingRule{{
-			Type:        "field",
-			OutboundTag: "direct",
-			Domain:      []string{"full:" + v.Add},
-		}}, t.Routing.Rules...)
-		serverDomain = v.Add
-		//解析IP
-		ips, e := net.LookupHost(v.Add)
-		if e != nil {
-			log.Println("net.LookupHost:", e)
-		}
-		serverIPs = ips
-	}
-	//将节点IP加入白名单
-	if len(serverIPs) > 0 {
-		t.Routing.Rules = append([]RoutingRule{{
-			Type:        "field",
-			OutboundTag: "direct",
-			IP:          serverIPs,
-		}}, t.Routing.Rules...)
-	}
-	//加入给定域名白名单
-	t.Routing.Rules = append([]RoutingRule{{
-		Type:        "field",
-		OutboundTag: "direct",
-		Domain:      DirectRuleDomains,
-	}}, t.Routing.Rules...)
-	return
-}
-
-func NewTemplateFromVmessInfo(v vmessInfo.VmessInfo) (t Template, info *entity.ExtraInfo, err error) {
+func NewTemplateFromVmessInfo(v vmessInfo.VmessInfo) (t Template, err error) {
 	setting := configure.GetSettingNotNil()
 	var tmplJson TmplJson
 	// 读入模板json
 	raw := []byte(TemplateJson)
 	err = jsoniter.Unmarshal(raw, &tmplJson)
 	if err != nil {
-		return t, nil, newError("error occurs while reading template json, please check whether templateJson variable is correct json format")
+		return t, newError("error occurs while reading template json, please check whether templateJson variable is correct json format")
 	}
 	// 其中Template是基础配置，替换掉t即可
 	t = tmplJson.Template
@@ -1168,7 +1284,7 @@ func NewTemplateFromVmessInfo(v vmessInfo.VmessInfo) (t Template, info *entity.E
 		t.Log = nil
 	}
 	// fakedns
-	if entity.ShouldDnsPoisonOpen() == 2 {
+	if specialMode.ShouldUseFakeDns() {
 		t.FakeDns = &FakeDns{
 			IpPool:   "198.18.0.0/15",
 			PoolSize: 65535,
@@ -1177,7 +1293,7 @@ func NewTemplateFromVmessInfo(v vmessInfo.VmessInfo) (t Template, info *entity.E
 	// 解析Outbound
 	o, err := ResolveOutbound(&v, "proxy", &global.GetEnvironmentConfig().PluginListenPort)
 	if err != nil {
-		return t, nil, err
+		return t, err
 	}
 	t.Outbounds[0] = o
 	var supportUDP = true
@@ -1193,26 +1309,25 @@ func NewTemplateFromVmessInfo(v vmessInfo.VmessInfo) (t Template, info *entity.E
 			Enabled:     muxon,
 			Concurrency: setting.Mux,
 		}
-	case "ss", "shadowsocks":
+	case "ss", "shadowsocks", "trojan":
+		break
 	default:
 		supportUDP = false
 	}
 	//根据配置修改端口
 	t.SetInbound(setting)
 	//设置DNS
-	dohIPs, dohHosts := t.SetDNS(v, supportUDP, setting)
+	dnsRouting, err := t.SetDNS(v, setting, supportUDP)
+	if err != nil {
+		return
+	}
 	//再修改outbounds
 	t.AppendDNSOutbound()
 	//最后是routing
 	t.Routing.DomainMatcher = "mph"
-	t.SetDNSRouting(v, dohIPs, dohHosts, setting, supportUDP)
-	serverIPs, serverDomain := t.SetDirectRuleRouting(v)
-	//添加目标服务器的ip到hosts中
-	//if len(serverDomain) > 0 && len(serverIPs) > 0 {
-	//	t.DNS.Hosts[serverDomain] = serverIPs[0]
-	//}
-	//PAC端口规则
-	if err = t.SetPacRouting(setting); err != nil {
+	t.SetDNSRouting(dnsRouting, supportUDP)
+	//规则端口规则
+	if err = t.SetRulePortRouting(setting); err != nil {
 		return
 	}
 	//根据是否使用全局代理修改路由
@@ -1234,12 +1349,7 @@ func NewTemplateFromVmessInfo(v vmessInfo.VmessInfo) (t Template, info *entity.E
 		return
 	}
 
-	return t, &entity.ExtraInfo{
-		DohIps:       dohIPs,
-		DohDomains:   dohHosts,
-		ServerIps:    serverIPs,
-		ServerDomain: serverDomain,
-	}, nil
+	return t, nil
 }
 
 func (t *Template) CheckDuplicatedTags() error {
@@ -1267,10 +1377,17 @@ func (t *Template) CheckDuplicatedTags() error {
 func (t *Template) CheckInboundPortsOccupied() (occupied bool, port string, pname string) {
 	var st []string
 	for _, in := range t.Inbounds {
-		if in.Settings != nil && in.Settings.UDP {
-			st = append(st, strconv.Itoa(in.Port)+":tcp,udp")
-		} else {
+		switch strings.ToLower(in.Protocol) {
+		case "http", "vmess", "vless", "trojan":
 			st = append(st, strconv.Itoa(in.Port)+":tcp")
+		case "dokodemo-door":
+			if in.Settings != nil && in.Settings.Network != "" {
+				st = append(st, strconv.Itoa(in.Port)+":"+in.Settings.Network)
+			} else {
+				st = append(st, strconv.Itoa(in.Port)+":tcp,udp")
+			}
+		default:
+			st = append(st, strconv.Itoa(in.Port)+":tcp,udp")
 		}
 	}
 	v2rayPath, _ := where.GetV2rayBinPath()
@@ -1339,7 +1456,7 @@ func (t *Template) AddMappingOutbound(v vmessInfo.VmessInfo, inboundPort string,
 	t.Inbounds = append(t.Inbounds, Inbound{
 		Port:     iPort,
 		Protocol: protocol,
-		Listen:   "::",
+		Listen:   "0.0.0.0",
 		Sniffing: Sniffing{
 			Enabled:      true,
 			DestOverride: []string{"http", "tls"},

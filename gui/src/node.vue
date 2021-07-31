@@ -514,20 +514,80 @@
             @keyup.native="handleImportEnter"
           ></b-input>
         </section>
-        <footer
-          class="modal-card-foot"
-          style="display:flex;justify-content:flex-end"
-        >
-          <button class="button" type="button" @click="showModalImport = false">
-            {{ $t("operations.cancel") }}
-          </button>
+        <footer class="modal-card-foot">
           <button
-            class="button is-primary"
+            class="button is-link is-light"
             type="button"
-            @click="handleClickImportConfirm"
+            @click="handleClickImportInBatch"
           >
-            {{ $t("operations.confirm") }}
+            {{ $t("operations.inBatch") }}
           </button>
+          <div
+            style="display:flex;justify-content:flex-end;width: -moz-available;"
+          >
+            <button
+              class="button"
+              type="button"
+              @click="showModalImport = false"
+            >
+              {{ $t("operations.cancel") }}
+            </button>
+            <button
+              class="button is-primary"
+              type="button"
+              @click="handleClickImportConfirm"
+            >
+              {{ $t("operations.confirm") }}
+            </button>
+          </div>
+        </footer>
+      </div>
+    </b-modal>
+    <b-modal
+      :active.sync="showModalImportInBatch"
+      has-modal-card
+      trap-focus
+      aria-role="dialog"
+      aria-modal
+      @close="showModalImport = false"
+    >
+      <div class="modal-card" style="width: 350px">
+        <header class="modal-card-head">
+          <p class="modal-card-title">{{ $t("operations.import") }}</p>
+        </header>
+        <section class="modal-card-body">
+          {{ $t("import.batchMessage") }}
+          <b-input
+            ref="importInput"
+            v-model="importWhat"
+            type="textarea"
+            custom-class="horizon-scroll"
+          ></b-input>
+        </section>
+        <footer class="modal-card-foot">
+          <div
+            style="display:flex;justify-content:flex-end;width: -moz-available;"
+          >
+            <button
+              class="button"
+              type="button"
+              @click="
+                () => {
+                  showModalImport = false;
+                  showModalImportInBatch = false;
+                }
+              "
+            >
+              {{ $t("operations.cancel") }}
+            </button>
+            <button
+              class="button is-primary"
+              type="button"
+              @click="handleClickImportConfirm"
+            >
+              {{ $t("operations.confirm") }}
+            </button>
+          </div>
         </footer>
       </div>
     </b-modal>
@@ -557,6 +617,7 @@ export default {
     return {
       importWhat: "",
       showModalImport: false,
+      showModalImportInBatch: false,
       currentPage: { servers: 1, subscriptions: 1 },
       tableData: {
         servers: [],
@@ -644,6 +705,9 @@ export default {
     });
   },
   methods: {
+    handleClickImportInBatch() {
+      this.showModalImportInBatch = true;
+    },
     handleModalImportShow() {
       this.$refs.importInput.focus();
     },
@@ -809,12 +873,48 @@ export default {
             queue: false
           });
           this.showModalImport = false;
+          this.showModalImportInBatch = false;
           this.importWhat = "";
         } else {
           this.$buefy.toast.open({
             message: res.data.message,
             type: "is-warning",
             position: "is-top",
+            queue: false
+          });
+        }
+      });
+    },
+    syncConnectedServer() {
+      this.$axios({
+        url: apiRoot + "/touch",
+        method: "delete",
+        data: {
+          touches: this.checkedRows.map(x => {
+            return {
+              id: x.id,
+              _type: x._type
+            };
+          })
+        }
+      }).then(res => {
+        if (res.data.code === "SUCCESS") {
+          this.tableData = res.data.data.touch;
+          this.checkedRows = [];
+          Object.assign(this.runningState, {
+            running: res.data.data.running
+              ? this.$t("common.isRunning")
+              : this.$t("common.notRunning"),
+            connectedServer: this.tableData.connectedServer,
+            lastConnectedServer: null
+          });
+          this.updateConnectView();
+        } else {
+          this.$buefy.toast.open({
+            message: res.data.message,
+            type: "is-warning",
+            position: "is-top",
+            duration: 5000,
             queue: false
           });
         }
@@ -829,40 +929,7 @@ export default {
         type: "is-danger",
         hasIcon: true,
         icon: " iconfont icon-alert",
-        onConfirm: () =>
-          this.$axios({
-            url: apiRoot + "/touch",
-            method: "delete",
-            data: {
-              touches: this.checkedRows.map(x => {
-                return {
-                  id: x.id,
-                  _type: x._type
-                };
-              })
-            }
-          }).then(res => {
-            if (res.data.code === "SUCCESS") {
-              this.tableData = res.data.data.touch;
-              this.checkedRows = [];
-              Object.assign(this.runningState, {
-                running: res.data.data.running
-                  ? this.$t("common.isRunning")
-                  : this.$t("common.notRunning"),
-                connectedServer: this.tableData.connectedServer,
-                lastConnectedServer: null
-              });
-              this.updateConnectView();
-            } else {
-              this.$buefy.toast.open({
-                message: res.data.message,
-                type: "is-warning",
-                position: "is-top",
-                duration: 5000,
-                queue: false
-              });
-            }
-          })
+        onConfirm: () => this.syncConnectedServer()
       });
     },
     handleClickAboutConnection(row, sub) {
@@ -894,6 +961,7 @@ export default {
                 duration: 5000,
                 queue: false
               });
+              this.syncConnectedServer();
             }
           }),
           3 * 1000,
@@ -1267,9 +1335,11 @@ td {
       margin-right: 0.3rem;
     }
   }
+
   .field.is-grouped.is-grouped-multiline:last-child {
     margin-bottom: 0;
   }
+
   padding: 0.75em 0.75em;
   margin-bottom: 1rem;
   position: sticky;
@@ -1391,6 +1461,7 @@ $coverBackground: rgba(0, 0, 0, 0.6);
   font-size: 12px;
   pointer-events: none;
 }
+
 .mobile-small {
   @media screen and (max-width: 450px) {
     border-radius: 2px;

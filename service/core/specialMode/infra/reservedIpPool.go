@@ -1,13 +1,13 @@
-package dnsPoison
+package infra
 
 import (
+	lru2 "github.com/v2rayA/v2rayA/infra/dataStructure/lru"
 	"log"
 	"sync"
-	"github.com/v2rayA/v2rayA/dataStructure/lru"
 )
 
 type ReservedIpPool struct {
-	domainLRU              *lru.LRU
+	domainLRU              *lru2.LRU
 	lastInsertedReservedIP reservedIP
 	m                      map[string]reservedIP
 	sync.Mutex
@@ -16,7 +16,7 @@ type ReservedIpPool struct {
 func NewReservedIpPool() *ReservedIpPool {
 	return &ReservedIpPool{
 		// (256 - 240) * 256 * 256 * (256 - 2)
-		domainLRU:              lru.New(0b10000000000000000000000000000 - 0b100000000000000000000*2),
+		domainLRU:              lru2.New(0b10000000000000000000000000000 - 0b100000000000000000000*2),
 		lastInsertedReservedIP: 0,
 		m:                      make(map[string]reservedIP),
 	}

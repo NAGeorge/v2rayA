@@ -1,9 +1,11 @@
-package dnsPoison
+package infra
 
 import (
 	"fmt"
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/pcapgo"
+	v2router "github.com/v2fly/v2ray-core/v4/app/router"
+	"github.com/v2fly/v2ray-core/v4/common/strmatcher"
 	"github.com/v2rayA/v2rayA/common/netTools"
 	"golang.org/x/net/dns/dnsmessage"
 	"log"
@@ -11,22 +13,20 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	v2router "v2ray.com/core/app/router"
-	"v2ray.com/core/common/strmatcher"
 )
 
 type handle struct {
-	dnsPoison *DnsPoison
-	done      chan interface{}
-	running   bool
+	dnsSupervisor *DnsSupervisor
+	done          chan interface{}
+	running       bool
 	*pcapgo.EthernetHandle
 	inspectedBlackDomains *domainBlacklist
 	portCache             *portCache
 }
 
-func newHandle(dnsPoison *DnsPoison, ethernetHandle *pcapgo.EthernetHandle) *handle {
+func newHandle(supervisor *DnsSupervisor, ethernetHandle *pcapgo.EthernetHandle) *handle {
 	return &handle{
-		dnsPoison:             dnsPoison,
+		dnsSupervisor:         supervisor,
 		done:                  make(chan interface{}),
 		EthernetHandle:        ethernetHandle,
 		inspectedBlackDomains: newDomainBlacklist(),
@@ -61,20 +61,17 @@ func (interfaceHandle *handle) handleSendMessage(m *dnsmessage.Message, sAddr, s
 	dmNoTQDN := strings.TrimSuffix(dm, ".")
 	if dm == "" {
 		return
-	} else if index := whitelistDomains.Match(dmNoTQDN); index > 0 {
+	} else if index := whitelistDomains.Match(dmNoTQDN); len(index) > 0 {
 		// whitelistDomains
 		return
 	} else if index := strings.Index(dmNoTQDN, "."); index <= 0 {
 		// 跳过随机的顶级域名
 		return
 	}
-	if q.Type == dnsmessage.TypeA {
-		//不在已探测黑名单中的放行
-		if !interfaceHandle.inspectedBlackDomains.Exists(q.Name.String()) {
-			return
-		}
+	//不在已探测黑名单中的放行
+	if !interfaceHandle.inspectedBlackDomains.Exists(q.Name.String()) {
+		return
 	}
-	//TODO: 不支持IPv6，AAAA投毒返回空，加速解析
 	return interfaceHandle.poison(m, dAddr, dPort, sAddr, sPort)
 }
 
@@ -91,11 +88,17 @@ func (interfaceHandle *handle) handleReceiveMessage(m *dnsmessage.Message) (resu
 		switch a := a.Body.(type) {
 		case *dnsmessage.CNAMEResource:
 			cname := a.CNAME.String()
-			msgs = append(msgs, "CNAME:"+strings.TrimSuffix(cname, "."))
+			msgs = append(msgs, "CNAME: "+strings.TrimSuffix(cname, "."))
 			dms = append(dms, cname)
 		case *dnsmessage.AResource:
-			msgs = append(msgs, "A:"+fmt.Sprintf("%d.%d.%d.%d", a.A[0], a.A[1], a.A[2], a.A[3]))
+			msgs = append(msgs, "A: "+fmt.Sprintf("%d.%d.%d.%d", a.A[0], a.A[1], a.A[2], a.A[3]))
 			if netTools.IsJokernet4(&a.A) {
+				spoofed = true
+			}
+			emptyRecord = false
+		case *dnsmessage.AAAAResource:
+			msgs = append(msgs, "AAAA: "+fmt.Sprintf("%v", net.IP(a.AAAA[:]).String()))
+			if netTools.IsJokernet6(&a.AAAA) {
 				spoofed = true
 			}
 			emptyRecord = false
@@ -140,19 +143,12 @@ func packetFilter(portCache *portCache, pPacket *gopacket.Packet, whitelistDnsSe
 		return
 	}
 	sAddr, dAddr := packet.NetworkLayer().NetworkFlow().Endpoints()
-	// TODO: 暂不支持IPv6
-	sIp := net.ParseIP(sAddr.String()).To4()
-	if len(sIp) != net.IPv4len {
-		return
-	}
+	sIp := net.ParseIP(sAddr.String())
 	// Domain-Name-Server whitelistIps
 	if ok := whitelistDnsServers.Match(sIp); ok {
 		return
 	}
-	dIp := net.ParseIP(dAddr.String()).To4()
-	if len(dIp) != net.IPv4len {
-		return
-	}
+	dIp := net.ParseIP(dAddr.String())
 	// Domain-Name-Server whitelistIps
 	if ok := whitelistDnsServers.Match(dIp); ok {
 		return
@@ -192,25 +188,25 @@ func (interfaceHandle *handle) handlePacket(packet gopacket.Packet, ifname strin
 	dm := m.Questions[0].Name.String()
 	if !m.Response {
 		ip := interfaceHandle.handleSendMessage(m, sAddr, sPort, dAddr, dPort, whitelistDomains)
-		// TODO: 不显示AAAA的投毒，因为暂时不支持IPv6
-		if ip[3] != 0 && m.Questions[0].Type == dnsmessage.TypeA {
-			log.Println("dnsPoison["+ifname+"]:", sAddr.String()+":"+sPort.String(), "->", dAddr.String()+":"+dPort.String(), dm, "poisoned as", fmt.Sprintf("%v.%v.%v.%v", ip[0], ip[1], ip[2], ip[3]))
+		// TODO: 分开显示AAAA的投毒
+		if ip[3] != 0 {
+			log.Println("supervisor["+ifname+"]:", sAddr.String()+":"+sPort.String(), "->", dAddr.String()+":"+dPort.String(), dm, "poisoned as", fmt.Sprintf("%v.%v.%v.%v", ip[0], ip[1], ip[2], ip[3]))
 		}
 	} else {
 		results, msg := interfaceHandle.handleReceiveMessage(m)
 		if results != nil {
-			log.Println("dnsPoison["+ifname+"]:", dAddr.String()+":"+dPort.String(), "<-", sAddr.String()+":"+sPort.String(), "("+dm, "=>", msg+")")
+			log.Println("supervisor["+ifname+"]:", dAddr.String()+":"+dPort.String(), "<-", sAddr.String()+":"+sPort.String(), "("+dm, "=>", msg+")")
 			for _, r := range results {
 				// print log
 				switch r.result {
 				case ProposeBlacklist:
-					log.Println("dnsPoison["+ifname+"]: [propose]", r.domain, "proof:", dm+msg)
+					log.Println("supervisor["+ifname+"]: [propose]", r.domain, "proof:", dm+msg)
 				case AgainstBlacklist:
-					log.Println("dnsPoison["+ifname+"]: [against]", r.domain, "proof:", dm+msg)
+					log.Println("supervisor["+ifname+"]: [against]", r.domain, "proof:", dm+msg)
 				case AddBlacklist:
-					log.Println("dnsPoison["+ifname+"]: {add blocklist}", r.domain)
+					log.Println("supervisor["+ifname+"]: {add blocklist}", r.domain)
 				case RemoveBlacklist:
-					log.Println("dnsPoison["+ifname+"]: {remove blocklist}", r.domain)
+					log.Println("supervisor["+ifname+"]: {remove blocklist}", r.domain)
 				}
 			}
 		}
@@ -221,11 +217,10 @@ func (interfaceHandle *handle) poison(m *dnsmessage.Message, lAddr, lPort, rAddr
 	q := m.Questions[0]
 	m.RCode = dnsmessage.RCodeSuccess
 	switch q.Type {
-	case dnsmessage.TypeAAAA:
-		//返回空回答
-	case dnsmessage.TypeA:
-		//对A查询返回一个公网地址以使得后续tcp连接经过网关嗅探，以dns污染解决dns污染
-		ip = interfaceHandle.dnsPoison.reservedIpPool.Lookup(q.Name.String())
+	case dnsmessage.TypeAAAA, dnsmessage.TypeA:
+		// TODO: 分开做AAAA记录
+		//返回一个公网地址以使得后续tcp连接经过网关嗅探，以dns污染解决dns污染
+		ip = interfaceHandle.dnsSupervisor.reservedIpPool.Lookup(q.Name.String())
 		m.Answers = []dnsmessage.Resource{{
 			Header: dnsmessage.ResourceHeader{
 				Name:  q.Name,

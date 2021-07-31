@@ -4,7 +4,7 @@ import (
 	"github.com/json-iterator/go"
 	"github.com/v2rayA/v2rayA/common/netTools/netstat"
 	"github.com/v2rayA/v2rayA/common/ntp"
-	"github.com/v2rayA/v2rayA/core/dnsPoison/entity"
+	"github.com/v2rayA/v2rayA/core/specialMode"
 	"github.com/v2rayA/v2rayA/core/v2ray/asset"
 	"github.com/v2rayA/v2rayA/core/v2ray/where"
 	"github.com/v2rayA/v2rayA/core/vmessInfo"
@@ -27,7 +27,7 @@ func RestartV2rayService() (err error) {
 		return newError("Please sync datetime first. Your datetime is ", time.Now().Local().Format(ntp.DisplayFormat), ", and the correct datetime is ", t.Local().Format(ntp.DisplayFormat))
 	}
 	setting := configure.GetSettingNotNil()
-	if (setting.Transparent == configure.TransparentGfwlist || setting.PacMode == configure.GfwlistMode) && !asset.IsGFWListExists() {
+	if (setting.Transparent == configure.TransparentGfwlist || setting.RulePortMode == configure.GfwlistMode) && !asset.IsGFWListExists() {
 		return newError("cannot find GFWList files. update GFWList and try again")
 	}
 	//关闭transparentProxy，防止v2ray在启动DOH时需要解析域名
@@ -131,15 +131,12 @@ func UpdateV2RayConfig(v *vmessInfo.VmessInfo) (err error) {
 			err = newError(e).Base(err)
 		}
 	}()
-	//iptables.SpoofingFilter.GetCleanCommands().Clean()
-	//defer iptables.SpoofingFilter.GetSetupCommands().Setup(nil)
 	plugin.GlobalPlugins.CloseAll()
-	entity.StopDNSPoison()
+	specialMode.StopDNSSupervisor()
 	//读配置，转换为v2ray配置并写入
 	var (
 		tmpl      Template
 		sr        *configure.ServerRaw
-		extraInfo *entity.ExtraInfo
 	)
 	if v == nil {
 		cs := configure.GetConnectedServer()
@@ -150,9 +147,9 @@ func UpdateV2RayConfig(v *vmessInfo.VmessInfo) (err error) {
 		if err != nil {
 			return
 		}
-		tmpl, extraInfo, err = NewTemplateFromVmessInfo(sr.VmessInfo)
+		tmpl, err = NewTemplateFromVmessInfo(sr.VmessInfo)
 	} else {
-		tmpl, extraInfo, err = NewTemplateFromVmessInfo(*v)
+		tmpl, err = NewTemplateFromVmessInfo(*v)
 	}
 	if err != nil {
 		return
@@ -187,7 +184,7 @@ func UpdateV2RayConfig(v *vmessInfo.VmessInfo) (err error) {
 		plugin.GlobalPlugins.Append(plu)
 	}
 
-	entity.CheckAndSetupDnsPoisonWithExtraInfo(extraInfo)
+	specialMode.CheckAndSetupDNSSupervisor()
 	return
 }
 

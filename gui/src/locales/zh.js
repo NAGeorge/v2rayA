@@ -23,7 +23,7 @@ export default {
     newVersion: "检测到新版本: {version}",
     messages: [
       "我们发现你还没有创建或导入任何节点、订阅。",
-      "我们支持以vmess、ss、ssr地址，或者订阅地址的方式导入，也支持手动创建节点，快来试试吧！"
+      "我们支持以节点地址或者订阅地址的方式导入，也支持手动创建节点，快来试试吧！"
     ]
   },
   v2ray: {
@@ -51,6 +51,7 @@ export default {
     delete: "删除",
     create: "创建",
     import: "导入",
+    inBatch: "批量",
     connect: "连接",
     disconnect: "断开",
     login: "登录",
@@ -81,16 +82,16 @@ export default {
     password: "密码"
   },
   setting: {
-    transparentProxy: "全局透明代理",
+    transparentProxy: "透明代理",
+    transparentType: "透明代理实现方式",
     pacMode: "规则端口的分流模式",
     preventDnsSpoofing: "防止DNS污染",
+    specialMode: "特殊模式",
     mux: "多路复用",
     autoUpdateSub: "自动更新订阅",
     autoUpdateGfwlist: "自动更新GFWList",
     preferModeWhenUpdate: "解析订阅链接/更新时优先使用",
     ipForwardOn: "开启局域网共享",
-    enhancedModeOn: "开启增强模式",
-    dnsForceModeOn: "关闭DNS分流",
     concurrency: "最大并发数",
     options: {
       global: "代理所有流量",
@@ -110,21 +111,23 @@ export default {
       updateSubAtIntervals: "每隔一段时间更新订阅（单位：小时）",
       updateGfwlistWhenStart: "服务端启动时更新GFWList",
       updateGfwlistAtIntervals: "每隔一段时间更新GFWList（单位：小时）",
-      dependTransparentMode: "跟随全局透明代理",
-      closed: "关闭"
+      dependTransparentMode: "跟随透明代理",
+      closed: "关闭",
+      advanced: "自定义高级设置"
     },
     messages: {
       gfwlist: "该时间是指本地文件最后修改时间，因此可能会领先最新版本",
       transparentProxy:
-        "全局代理开启后，无需经过额外设置，任何TCP流量均会经过V2RayA。另外，如需作为网关使得连接本机的其他主机也享受代理，请勾选“开启局域网共享”。注：非增强模式下本机docker容器不会走代理。",
+        "全局代理开启后，无需经过额外设置，任何TCP流量均会经过V2RayA。另外，如需作为网关使得连接本机的其他主机或docker也享受代理，请勾选“开启局域网共享”。",
+      transparentType:
+        "★tproxy: 支持udp，需要设置端口白名单。★redirect: docker友好，不支持udp，需要占用本地53端口以应对dns污染。",
       pacMode:
         "该选项设置规则分流端口所使用的路由模式。默认情况下规则分流端口为20172，HTTP协议。",
       preventDnsSpoofing:
-        "如果透明代理出现问题，可尝试将'防止DNS污染'选为'关闭'，或打开增强模式(v0.7.0.2+)。" +
         "★转发DNS查询: 通过代理服务器转发DNS请求。" +
-        "★DoH(v2ray-core: 4.22.0+): DNS over HTTPS，建议选择较快且稳定的DoH服务提供商。" +
-        "★增强模式(v0.7.0.2+)更快速，不支持udp和ipv6。" +
-        "★关闭DNS分流(v1.1.3+)不对国内站点的DNS查询进行分流(可能会影响国内站点访问速度)",
+        "★DoH(v2ray-core: 4.22.0+): DNS over HTTPS。",
+      specialMode:
+        "★supervisor：监控dns污染，提前拦截，利用v2ray-core的sniffing解决污染。★fakedns：使用fakedns策略加速解析，需要占用本地53端口。",
       tcpFastOpen:
         "简化TCP握手流程以加速建立连接，可能会增加封包的特征。若系统不支持可能会导致无法正常连接。",
       mux:
@@ -183,11 +186,11 @@ export default {
   },
   dns: {
     title: "配置DNS服务器",
-    dnsPriorityList: "DNS服务优先级列表",
+    internalQueryServers: "域名查询服务器",
+    externalQueryServers: "国外域名查询服务器",
     messages: [
-      '在"仅防止DNS劫持"模式下该列表是的DNS配置，在其他模式下该列表的第一项作为查询国内地址的DNS服务器。',
-      "列表仅填写DNS服务器的IP或域名，不支持53以外的端口。",
-      "建议上述列表2行即可，留空保存可恢复默认"
+      "“@:(dns.internalQueryServers)” 用于查询国内域名，而 “@:(dns.externalQueryServers)” 用于查询国外域名。",
+      "如果将 “@:(dns.externalQueryServers)” 留空，“@:(dns.internalQueryServers)” 将会负责查询所有域名。"
     ]
   },
   egressPortWhitelist: {
@@ -196,7 +199,7 @@ export default {
     udpPortWhitelist: "UDP端口白名单",
     messages: [
       "如果你将v2rayA架设在对外提供服务的服务器A上，连接了代理服务器B，那么你需要注意：",
-      "全局透明代理会使得所有TCP、UDP流量走代理，通过走代理的流量其源IP地址会被替换为代理服务器B的IP地址，那么如果有客户向你的服务器A发出请求，他却将得到从你代理服务器B发出的回答，该回答在客户看来无疑是不合法的，从而导致连接被拒绝。",
+      "透明代理会使得所有TCP、UDP流量走代理，通过走代理的流量其源IP地址会被替换为代理服务器B的IP地址，那么如果有客户向你的服务器A发出请求，他却将得到从你代理服务器B发出的回答，该回答在客户看来无疑是不合法的，从而导致连接被拒绝。",
       "因此，需要将服务器提供的对外服务端口包含在白名单中，使其不走代理。如ssh(22)、v2raya({v2rayaPort})。",
       "如不对外提供服务或仅对局域网内主机提供服务，则可不设置白名单。",
       "格式：22表示端口22，20170:20172表示20170到20172三个端口。"
@@ -220,8 +223,12 @@ export default {
     password: "密码",
     origin: "原版"
   },
+  configureSubscription: {
+    title: "订阅配置"
+  },
   import: {
     message: "填入节点链接或订阅地址：",
+    batchMessage: "一行一个节点链接:",
     qrcodeError: "找不到有效的二维码，请重新尝试"
   },
   delete: {

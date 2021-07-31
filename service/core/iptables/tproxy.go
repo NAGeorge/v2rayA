@@ -3,6 +3,7 @@ package iptables
 import (
 	"fmt"
 	"github.com/v2rayA/v2rayA/common/cmds"
+	"github.com/v2rayA/v2rayA/core/specialMode"
 	"strings"
 )
 
@@ -65,11 +66,13 @@ iptables -w 2 -t mangle -A SETMARK -d 192.0.0.0/24 -j RETURN
 iptables -w 2 -t mangle -A SETMARK -d 192.0.2.0/24 -j RETURN
 iptables -w 2 -t mangle -A SETMARK -d 192.88.99.0/24 -j RETURN
 iptables -w 2 -t mangle -A SETMARK -d 192.168.0.0/16 -j RETURN
-iptables -w 2 -t mangle -A SETMARK -d 198.18.0.0/15 -j RETURN
+# fakedns
+# iptables -w 2 -t mangle -A SETMARK -d 198.18.0.0/15 -j RETURN
 iptables -w 2 -t mangle -A SETMARK -d 198.51.100.0/24 -j RETURN
 iptables -w 2 -t mangle -A SETMARK -d 203.0.113.0/24 -j RETURN
 iptables -w 2 -t mangle -A SETMARK -d 224.0.0.0/4 -j RETURN
-iptables -w 2 -t mangle -A SETMARK -d 240.0.0.0/4 -j RETURN
+# supervisor
+# iptables -w 2 -t mangle -A SETMARK -d 240.0.0.0/4 -j RETURN
 iptables -w 2 -t mangle -A SETMARK -p tcp -m multiport --sports {{TCP_PORTS}} -j RETURN
 iptables -w 2 -t mangle -A SETMARK -p udp -m multiport --sports {{UDP_PORTS}} -j RETURN
 iptables -w 2 -t mangle -A SETMARK -p tcp -j MARK --set-mark 1
@@ -77,12 +80,26 @@ iptables -w 2 -t mangle -A SETMARK -p udp -j MARK --set-mark 1
 
 # 走过TPROXY的通行
 iptables -w 2 -t mangle -A TP_OUT -m mark --mark 0xff -j RETURN
+`
+	if specialMode.ShouldLocalDnsListen() {
+		commands += ` 
+iptables -w 2 -t mangle -A TP_OUT -p udp --dport 53 -j RETURN
+`
+	}
+	commands += `
 # 本机发出去的 TCP 和 UDP 走一下 SETMARK 链
 iptables -w 2 -t mangle -A TP_OUT -p tcp -m mark ! --mark 1 -j SETMARK
 iptables -w 2 -t mangle -A TP_OUT -p udp -m mark ! --mark 1 -j SETMARK
 
 # 走过TPROXY的通行
 iptables -w 2 -t mangle -A TP_PRE -m mark --mark 0xff -j RETURN
+`
+	if specialMode.ShouldLocalDnsListen() {
+		commands += ` 
+iptables -w 2 -t mangle -A TP_PRE -p udp --dport 53 -j RETURN
+`
+	}
+	commands += `
 # 让内网主机发出的 TCP 和 UDP 走一下 SETMARK 链
 iptables -w 2 -t mangle -A TP_PRE -p tcp -m mark ! --mark 1 -j SETMARK
 iptables -w 2 -t mangle -A TP_PRE -p udp -m mark ! --mark 1 -j SETMARK
@@ -122,7 +139,8 @@ ip6tables -w 2 -t mangle -A SETMARK -d 2001::/32 -j RETURN
 ip6tables -w 2 -t mangle -A SETMARK -d 2001:20::/28 -j RETURN
 ip6tables -w 2 -t mangle -A SETMARK -d 2001:db8::/32 -j RETURN
 ip6tables -w 2 -t mangle -A SETMARK -d 2002::/16 -j RETURN
-ip6tables -w 2 -t mangle -A SETMARK -d fc00::/7 -j RETURN
+# fakedns
+# ip6tables -w 2 -t mangle -A SETMARK -d fc00::/7 -j RETURN
 ip6tables -w 2 -t mangle -A SETMARK -d fe80::/10 -j RETURN
 ip6tables -w 2 -t mangle -A SETMARK -d ff00::/8 -j RETURN
 ip6tables -w 2 -t mangle -A SETMARK -p tcp -m multiport --sports {{TCP_PORTS}} -j RETURN
@@ -132,12 +150,26 @@ ip6tables -w 2 -t mangle -A SETMARK -p udp -j MARK --set-mark 1
 
 # 走过TPROXY的通行
 ip6tables -w 2 -t mangle -A TP_OUT -m mark --mark 0xff -j RETURN
+`
+		if specialMode.ShouldLocalDnsListen() {
+			commands += ` 
+ip6tables -w 2 -t mangle -A TP_OUT -p udp --dport 53 -j RETURN
+`
+		}
+		commands += `
 # 本机发出去的 TCP 和 UDP 走一下 SETMARK 链
 ip6tables -w 2 -t mangle -A TP_OUT -p tcp -m mark ! --mark 1 -j SETMARK
 ip6tables -w 2 -t mangle -A TP_OUT -p udp -m mark ! --mark 1 -j SETMARK
 
 # 走过TPROXY的通行
 ip6tables -w 2 -t mangle -A TP_PRE -m mark --mark 0xff -j RETURN
+`
+		if specialMode.ShouldLocalDnsListen() {
+			commands += ` 
+ip6tables -w 2 -t mangle -A TP_PRE -p udp --dport 53 -j RETURN
+`
+		}
+		commands += `
 # 让内网主机发出的 TCP 和 UDP 走一下 SETMARK 链
 ip6tables -w 2 -t mangle -A TP_PRE -p tcp -m mark ! --mark 1 -j SETMARK
 ip6tables -w 2 -t mangle -A TP_PRE -p udp -m mark ! --mark 1 -j SETMARK

@@ -6,6 +6,7 @@ import (
 	"github.com/v2rayA/v2rayA/core/v2ray/asset"
 	"github.com/v2rayA/v2rayA/db/configure"
 	"github.com/v2rayA/v2rayA/global"
+	"log"
 	"time"
 )
 
@@ -19,13 +20,13 @@ func GetSetting() *configure.Setting {
 }
 
 func UpdateSetting(setting *configure.Setting) (err error) {
-	if (setting.Transparent == configure.TransparentGfwlist || setting.PacMode == configure.GfwlistMode) && !asset.IsGFWListExists() {
+	if (setting.Transparent == configure.TransparentGfwlist || setting.RulePortMode == configure.GfwlistMode) && !asset.IsGFWListExists() {
 		return newError("cannot find GFWList files. update GFWList and try again")
 	}
 	if setting.IntranetSharing != ipforward.IsIpForwardOn() {
-		err = ipforward.WriteIpForward(setting.IntranetSharing)
-		if err != nil {
-			return
+		e := ipforward.WriteIpForward(setting.IntranetSharing)
+		if e != nil {
+			log.Println("[warning]", e)
 		}
 	}
 	err = configure.SetSetting(setting)

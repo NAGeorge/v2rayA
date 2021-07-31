@@ -10,7 +10,9 @@ type (
 	TouchType               string
 	DefaultYesNo            string
 	TransparentMode         string
+	TransparentType         string
 	Antipollution           string
+	SpecialMode             string
 )
 
 const (
@@ -19,6 +21,9 @@ const (
 	TransparentWhitelist = TransparentMode("whitelist")
 	TransparentGfwlist   = TransparentMode("gfwlist")
 	TransparentPac       = TransparentMode("pac")
+
+	TransparentTproxy   = TransparentType("tproxy")
+	TransparentRedirect = TransparentType("redirect")
 
 	Default = DefaultYesNo("default")
 	Yes     = DefaultYesNo("yes")
@@ -52,17 +57,23 @@ const (
 	ServerType             = TouchType("server")
 	SubscriptionServerType = TouchType("subscriptionServer")
 
-	DnsForward          = Antipollution("dnsforward")
-	DoH                 = Antipollution("doh")
-	AntipollutionNone   = Antipollution("none")   //历史原因，none代表“仅防止dns劫持”，不代表关闭
-	AntipollutionClosed = Antipollution("closed") //直接iptables略过udp
+	AntipollutionDnsForward = Antipollution("dnsforward")
+	AntipollutionDoH        = Antipollution("doh")
+	AntipollutionAntiHijack = Antipollution("none")     // 历史原因，none代表“仅防止dns劫持”，不代表关闭
+	AntipollutionClosed     = Antipollution("closed")
+	AntipollutionAdvanced   = Antipollution("advanced") // 自定义
+
+	SpecialModeNone       = SpecialMode("none")
+	SpecialModeSupervisor = SpecialMode("supervisor")
+	SpecialModeFakeDns    = SpecialMode("fakedns")
 )
 
 const (
 	RoutingATemplate = `default: proxy
 
 # write your own rules below
-domain(domain:webofscience.com,domain:webofknowledge.com,domain:clarivate.com,domain:ieee.org,domain:mdpi.com,domain:qq.com)->direct
+domain(geosite:google-scholar)->proxy
+domain(geosite:category-scholar-!cn,geosite:category-scholar-cn,domain:qq.com)->direct
 
 ip(geoip:private, geoip:cn)->direct
 domain(geosite:cn)->direct`

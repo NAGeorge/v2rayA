@@ -5,13 +5,26 @@ import (
 	"github.com/v2rayA/v2rayA/global"
 	"os/exec"
 	"strings"
+	"sync"
+	"time"
 )
 
 var NotFoundErr = fmt.Errorf("not found")
 var ServiceNameList = []string{"v2ray", "xray"}
+var v2rayVersion struct {
+	version    string
+	lastUpdate time.Time
+	mu         sync.Mutex
+}
 
 /* get the version of v2ray-core without 'v' like 4.23.1 */
 func GetV2rayServiceVersion() (ver string, err error) {
+	// cache for 10 seconds
+	v2rayVersion.mu.Lock()
+	defer v2rayVersion.mu.Unlock()
+	if time.Since(v2rayVersion.lastUpdate) < 10*time.Second {
+		return v2rayVersion.version, nil
+	}
 	v2rayPath, err := GetV2rayBinPath()
 	if err != nil || len(v2rayPath) <= 0 {
 		return "", newError("cannot find v2ray executable binary")
@@ -25,6 +38,8 @@ func GetV2rayServiceVersion() (ver string, err error) {
 	if strings.ToUpper(fields[0]) != "V2RAY" {
 		ver = "UnknownClient"
 	}
+	v2rayVersion.version = ver
+	v2rayVersion.lastUpdate = time.Now()
 	return
 }
 
@@ -48,12 +63,8 @@ func getV2rayBinPathAnyway() (path string, err error) {
 func getV2rayBinPath(target string) (string, error) {
 	var pa string
 	//从环境变量里找
-	out, err := exec.Command("sh", "-c", "command -v "+target).CombinedOutput()
+	pa, err := exec.LookPath(target)
 	if err != nil {
-		return "", NotFoundErr
-	}
-	pa = strings.TrimSpace(string(out))
-	if pa == "" {
 		return "", NotFoundErr
 	}
 	return pa, nil
