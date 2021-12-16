@@ -6,7 +6,7 @@ export default {
     v2rayCoreStatus: "v2ray-core状态",
     checkRunning: "检测中",
     isRunning: "正在运行",
-    notRunning: "尚未运行",
+    notRunning: "就绪",
     notLogin: "未登录",
     latest: "最新",
     local: "本地",
@@ -14,7 +14,8 @@ export default {
     fail: "失败",
     message: "提示",
     none: "无",
-    optional: "可选"
+    optional: "可选",
+    loadBalance: "负载均衡"
   },
   welcome: {
     title: "初来乍到，请多关照",
@@ -34,7 +35,13 @@ export default {
     name: "节点名",
     address: "节点地址",
     protocol: "协议",
-    latency: "时延"
+    latency: "时延",
+    lastSeenTime: "上次存活时间",
+    lastTryTime: "上次测试时间",
+    messages: {
+      notAllowInsecure:
+        "根据 {name} 的官方文档，如果你使用 {name}，将不允许 AllowInsecure"
+    }
   },
   subscription: {
     host: "域名",
@@ -54,6 +61,7 @@ export default {
     inBatch: "批量",
     connect: "连接",
     disconnect: "断开",
+    select: "选择",
     login: "登录",
     logout: "注销",
     configure: "配置",
@@ -66,14 +74,15 @@ export default {
     helpManual: "查看帮助",
     yes: "是",
     no: "否",
-    switchSite: "切换至备用站点"
+    switchSite: "切换至备用站点",
+    addOutbound: "新增一个出站 (outbound)"
   },
   register: {
     title: "初来乍到，创建一个管理员账号",
     messages: [
       "请记住您创建的管理员账号，用于登录该管理页面。",
       "账号信息位于本地，我们不会上传任何信息到服务器。",
-      "如不慎忘记密码，可通过清除配置文件重置。"
+      "如不慎忘记密码，使用 v2raya --reset-password 重置。"
     ]
   },
   login: {
@@ -91,7 +100,8 @@ export default {
     autoUpdateSub: "自动更新订阅",
     autoUpdateGfwlist: "自动更新GFWList",
     preferModeWhenUpdate: "解析订阅链接/更新时优先使用",
-    ipForwardOn: "开启局域网共享",
+    ipForwardOn: "开启IP转发",
+    portSharingOn: "开启端口分享",
     concurrency: "最大并发数",
     options: {
       global: "代理所有流量",
@@ -120,14 +130,14 @@ export default {
       transparentProxy:
         "全局代理开启后，无需经过额外设置，任何TCP流量均会经过V2RayA。另外，如需作为网关使得连接本机的其他主机或docker也享受代理，请勾选“开启局域网共享”。",
       transparentType:
-        "★tproxy: 支持udp，需要设置端口白名单。★redirect: docker友好，不支持udp，需要占用本地53端口以应对dns污染。",
+        "★tproxy: 支持udp，不支持docker。★redirect: docker友好，不支持udp，需要占用本地53端口以应对dns污染。",
       pacMode:
         "该选项设置规则分流端口所使用的路由模式。默认情况下规则分流端口为20172，HTTP协议。",
       preventDnsSpoofing:
         "★转发DNS查询: 通过代理服务器转发DNS请求。" +
         "★DoH(v2ray-core: 4.22.0+): DNS over HTTPS。",
       specialMode:
-        "★supervisor：监控dns污染，提前拦截，利用v2ray-core的sniffing解决污染。★fakedns：使用fakedns策略加速解析，需要占用本地53端口。",
+        "★supervisor：监控dns污染，提前拦截，利用v2ray-core的sniffing解决污染。★fakedns：使用fakedns策略加速解析。",
       tcpFastOpen:
         "简化TCP握手流程以加速建立连接，可能会增加封包的特征。若系统不支持可能会导致无法正常连接。",
       mux:
@@ -136,7 +146,8 @@ export default {
                           <p>当前设置的端口白名单为：</p>
                           <p>TCP: {tcpPorts}</p>
                           <p>UDP: {udpPorts}</p>`,
-      xtlsNotWithWs: `xtls无法和websocket共存`
+      xtlsNotWithWs: `xtls无法和websocket共存`,
+      grpcShouldWithTls: `gRPC必须启用TLS`
     }
   },
   customAddressPort: {
@@ -145,6 +156,8 @@ export default {
     portSocks5: "socks5端口",
     portHttp: "http端口",
     portHttpWithPac: "http端口(带分流规则)",
+    portVlessGrpc: "VLESS-GRPC端口(带分流规则)",
+    portVlessGrpcLink: "VLESS-GRPC端口链接",
     messages: [
       "如需修改后端运行地址(默认0.0.0.0:2017)，可添加环境变量<code>V2RAYA_ADDRESS</code>或添加启动参数<code>--address</code>。",
       "docker模式下如果未使用<code>--privileged --network host</code>参数启动容器，可通过修改端口映射修改socks5、http端口。",
@@ -220,6 +233,7 @@ export default {
     hostObfuscation: "域名(host)",
     pathObfuscation: "路径(path)",
     seedObfuscation: "混淆种子",
+    username: "用户名",
     password: "密码",
     origin: "原版"
   },
@@ -268,5 +282,20 @@ export default {
   },
   routingA: {
     messages: ["点击“查看帮助”按钮以获取帮助"]
+  },
+  outbound: {
+    addMessage: "请输入你想要添加的出站(outbound)名称：",
+    deleteMessage:
+      '确定要<b>删除</b>出站 "{outboundName}" 吗？注意，该操作是不可逆的。'
+  },
+  driver: {
+    welcome: [
+      "首先导入节点服务器",
+      "初次使用，还没有任何节点服务器，在这里导入或创建节点服务器。"
+    ],
+    tabs: [
+      "订阅与节点服务器",
+      "导入订阅、节点服务器后，在这里切换和管理你的订阅、普通节点以及订阅节点。"
+    ]
   }
 };

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"github.com/v2rayA/v2rayA/common"
 	"github.com/v2rayA/v2rayA/core/v2ray"
-	dnsParser2 "github.com/v2rayA/v2rayA/infra/dnsParser"
+	"github.com/v2rayA/v2rayA/core/v2ray/service"
 	"net"
 	"net/url"
 	"strconv"
@@ -21,18 +21,18 @@ func RefineDnsList(dnsList string) (string, error) {
 	list = common.Deduplicate(list)
 nextLine:
 	for i, line := range list {
-		dns := dnsParser2.Parse(line)
+		dns := v2ray.ParseAdvancedDnsLine(line)
 		if dns == nil {
 			return "", fmt.Errorf("invalid format: %v: no outbound found", line)
-		}
-		if dns.Out != "direct" && dns.Out != "proxy" {
-			return "", fmt.Errorf("invalid outbound: %v", dns.Out)
 		}
 		if dns.Val == "localhost" {
 			return "", fmt.Errorf("instead of localhost, use 127.0.0.1 or ::1 because it is a keyword of v2ray-core")
 		}
 		if dns.Val == "" {
 			return "", fmt.Errorf("illegal server: %v", line)
+		}
+		if dns.Out == "block" {
+			return "", fmt.Errorf("cannot use block as outobund")
 		}
 		if net.ParseIP(dns.Val) != nil {
 			continue nextLine
@@ -46,17 +46,18 @@ nextLine:
 			if u, err := url.Parse(dns.Val); err == nil {
 				switch u.Scheme {
 				case "https":
-					if v2ray.CheckDohSupported() != nil {
+					if service.CheckDohSupported() != nil {
 						return "", fmt.Errorf("%w: %v", UnsupportedProtocol, u.Scheme)
 					}
 				case "tcp":
-					if strings.HasPrefix(u.Scheme, "tcp") && v2ray.CheckTcpDnsSupported() != nil {
+					if strings.HasPrefix(u.Scheme, "tcp") && service.CheckTcpDnsSupported() != nil {
 						return "", fmt.Errorf("%w: %v", UnsupportedProtocol, u.Scheme)
 					}
-				//case "quic":
-				//	if v2ray.CheckQuicLocalDnsSupported() != nil {
-				//		return "", fmt.Errorf("%w: %v", UnsupportedProtocol, u.Scheme)
-				//	}
+				case "quic":
+					// FIXME: after quic:// supported
+					if service.CheckQuicLocalDnsSupported() != nil {
+						return "", fmt.Errorf("%w: %v", UnsupportedProtocol, u.Scheme)
+					}
 				case "":
 					goto invalid
 				default:

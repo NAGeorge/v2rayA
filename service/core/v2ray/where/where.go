@@ -2,8 +2,11 @@ package where
 
 import (
 	"fmt"
-	"github.com/v2rayA/v2rayA/global"
+	"github.com/v2rayA/v2rayA/conf"
+	"os"
 	"os/exec"
+	"path"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -27,12 +30,12 @@ func GetV2rayServiceVersion() (ver string, err error) {
 	}
 	v2rayPath, err := GetV2rayBinPath()
 	if err != nil || len(v2rayPath) <= 0 {
-		return "", newError("cannot find v2ray executable binary")
+		return "", fmt.Errorf("cannot find v2ray executable binary")
 	}
-	out, err := exec.Command("sh", "-c", fmt.Sprintf("%v -version", v2rayPath)).Output()
+	out, err := exec.Command(v2rayPath, "-version").Output()
 	var fields []string
 	if fields = strings.Fields(strings.TrimSpace(string(out))); len(fields) < 2 {
-		return "", newError("cannot parse version of v2ray")
+		return "", fmt.Errorf("cannot parse version of v2ray")
 	}
 	ver = fields[1]
 	if strings.ToUpper(fields[0]) != "V2RAY" {
@@ -44,7 +47,7 @@ func GetV2rayServiceVersion() (ver string, err error) {
 }
 
 func GetV2rayBinPath() (string, error) {
-	v2rayBinPath := global.GetEnvironmentConfig().V2rayBin
+	v2rayBinPath := conf.GetEnvironmentConfig().V2rayBin
 	if v2rayBinPath == "" {
 		return getV2rayBinPathAnyway()
 	}
@@ -61,11 +64,23 @@ func getV2rayBinPathAnyway() (path string, err error) {
 }
 
 func getV2rayBinPath(target string) (string, error) {
+	if runtime.GOOS == "windows" && !strings.HasSuffix(strings.ToLower(target), ".exe") {
+		target += ".exe"
+	}
 	var pa string
 	//从环境变量里找
 	pa, err := exec.LookPath(target)
+	if err == nil {
+		return pa, nil
+	}
+	//从 pwd 里找
+	pwd, err := os.Getwd()
 	if err != nil {
 		return "", NotFoundErr
 	}
-	return pa, nil
+	pa = path.Join(pwd, target)
+	if _, err := os.Stat(pa); err == nil {
+		return pa, nil
+	}
+	return "", NotFoundErr
 }

@@ -4,9 +4,9 @@ import (
 	"github.com/muhammadmuzzammil1998/jsonc"
 	"github.com/v2rayA/v2rayA/common"
 	"github.com/v2rayA/v2rayA/common/files"
+	"github.com/v2rayA/v2rayA/conf"
 	"github.com/v2rayA/v2rayA/core/v2ray/where"
-	"github.com/v2rayA/v2rayA/global"
-	"log"
+	"github.com/v2rayA/v2rayA/pkg/util/log"
 	"os"
 	"path"
 	"path/filepath"
@@ -14,7 +14,14 @@ import (
 )
 
 func GetV2rayLocationAsset() (s string) {
-	var candidates = []string{`/usr/local/share/v2ray`, `/usr/share/v2ray`, `/usr/local/share/xray`, `/usr/share/xray`}
+	var candidates = []string{
+		"/usr/local/share/v2ray",
+		"/usr/share/v2ray",
+		"/opt/share/v2ray",
+		"/usr/local/share/xray",
+		"/usr/share/xray",
+		"/opt/share/xray",
+	}
 	var is bool
 	if ver, err := where.GetV2rayServiceVersion(); err == nil {
 		if is, err = common.VersionGreaterEqual(ver, "4.27.1"); is {
@@ -30,14 +37,9 @@ func GetV2rayLocationAsset() (s string) {
 			}
 		}
 	}
-	// old version of v2ray
 	if s == "" {
-		//maybe v2ray working directory
-		v2rayPath, err := where.GetV2rayBinPath()
-		if err != nil {
-			s = "/etc/v2ray"
-		}
-		s = path.Dir(v2rayPath)
+		// set as v2rayA config directory
+		s = conf.GetEnvironmentConfig().Config
 	}
 	return
 }
@@ -51,6 +53,13 @@ func IsGFWListExists() bool {
 }
 func IsGeoipExists() bool {
 	_, err := os.Stat(path.Join(GetV2rayLocationAsset(), "geoip.dat"))
+	if err != nil {
+		return false
+	}
+	return true
+}
+func IsGeoipOnlyCnPrivateExists() bool {
+	_, err := os.Stat(path.Join(GetV2rayLocationAsset(), "geoip-only-cn-private.dat"))
 	if err != nil {
 		return false
 	}
@@ -77,7 +86,7 @@ func IsCustomExists() bool {
 func GetConfigBytes() (b []byte, err error) {
 	b, err = os.ReadFile(GetV2rayConfigPath())
 	if err != nil {
-		log.Println(err)
+		log.Warn("failed to get config: %v", err)
 		return
 	}
 	b = jsonc.ToJSON(b)
@@ -85,11 +94,11 @@ func GetConfigBytes() (b []byte, err error) {
 }
 
 func GetV2rayConfigPath() (p string) {
-	return path.Join(global.GetEnvironmentConfig().Config, "config.json")
+	return path.Join(conf.GetEnvironmentConfig().Config, "config.json")
 }
 
 func GetV2rayConfigDirPath() (p string) {
-	return global.GetEnvironmentConfig().V2rayConfigDirectory
+	return conf.GetEnvironmentConfig().V2rayConfigDirectory
 }
 
 func LoyalsoldierSiteDatExists() bool {

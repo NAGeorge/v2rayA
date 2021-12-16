@@ -1,9 +1,13 @@
 package configure
 
-import "github.com/v2rayA/v2rayA/core/ipforward"
+import (
+	"github.com/v2rayA/v2rayA/common"
+	"github.com/v2rayA/v2rayA/core/ipforward"
+	"github.com/v2rayA/v2rayA/pkg/util/log"
+)
 
 type Setting struct {
-	RulePortMode                       PacMode         `json:"pacMode"`
+	RulePortMode                       RulePortMode    `json:"pacMode"`
 	ProxyModeWhenSubscribe             ProxyMode       `json:"proxyModeWhenSubscribe"`
 	GFWListAutoUpdateMode              AutoUpdateMode  `json:"pacAutoUpdateMode"`
 	GFWListAutoUpdateIntervalHour      int             `json:"pacAutoUpdateIntervalHour"`
@@ -13,7 +17,8 @@ type Setting struct {
 	MuxOn                              DefaultYesNo    `json:"muxOn"`
 	Mux                                int             `json:"mux"`
 	Transparent                        TransparentMode `json:"transparent"`
-	IntranetSharing                    bool            `json:"ipforward"`
+	IpForward                          bool            `json:"ipforward"`
+	PortSharing                        bool            `json:"portSharing"`
 	SpecialMode                        SpecialMode     `json:"specialMode"`
 	TransparentType                    TransparentType `json:"transparentType"`
 	AntiPollution                      Antipollution   `json:"antipollution"`
@@ -31,12 +36,18 @@ func NewSetting() (setting *Setting) {
 		MuxOn:                              No,
 		Mux:                                8,
 		Transparent:                        TransparentClose,
-		IntranetSharing:                    ipforward.IsIpForwardOn(),
+		IpForward:                          ipforward.IsIpForwardOn(),
+		PortSharing:                        false,
 		SpecialMode:                        SpecialModeNone,
 		TransparentType:                    TransparentRedirect,
 		AntiPollution:                      AntipollutionClosed,
 	}
+}
 
+func (s *Setting) FillEmpty() {
+	if err := common.FillEmpty(s, GetSettingNotNil()); err != nil {
+		log.Warn("FillEmpty: %v:", err)
+	}
 }
 
 type CustomPac struct {

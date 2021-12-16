@@ -57,38 +57,35 @@
         </template>
         <b-select v-model="transparent" expanded>
           <option value="close">{{ $t("setting.options.off") }}</option>
-          <option value="proxy">{{ $t("setting.options.global") }}</option>
-          <option value="whitelist">{{
+          <option v-show="!lite" value="proxy">{{
+            $t("setting.options.global")
+          }}</option>
+          <option v-show="!lite" value="whitelist">{{
             $t("setting.options.whitelistCn")
           }}</option>
-          <option value="gfwlist">{{ $t("setting.options.gfwlist") }}</option>
-          <option v-show="showTransparentModeRoutingPac" value="pac">{{
+          <option v-show="!lite" value="gfwlist">{{
+            $t("setting.options.gfwlist")
+          }}</option>
+          <option v-show="!lite" value="pac">{{
             $t("setting.options.sameAsPacMode")
           }}</option>
         </b-select>
-        <b-button
-          v-show="
-            transparent !== 'close' &&
-              ((!showTransparentType && iptablesMode === 'tproxy') ||
-                (showTransparentType && transparentType === 'tproxy'))
-          "
-          style="border-radius: 0;z-index: 2;"
-          @click="handleClickPortWhiteList"
-        >
-          {{ $t("egressPortWhitelist.title") }}
-        </b-button>
         <b-checkbox-button
+          v-show="!lite"
           v-model="ipforward"
           :native-value="true"
           style="position:relative;left:-1px;"
           >{{ $t("setting.ipForwardOn") }}
         </b-checkbox-button>
+        <b-checkbox-button
+          v-model="portSharing"
+          :native-value="true"
+          style="position:relative;left:-1px;"
+          >{{ $t("setting.portSharingOn") }}
+        </b-checkbox-button>
       </b-field>
 
-      <b-field
-        v-show="transparent !== 'close' && showTransparentType"
-        label-position="on-border"
-      >
+      <b-field v-show="transparent !== 'close'" label-position="on-border">
         <template slot="label">
           {{ $t("setting.transparentType") }}
           <b-tooltip
@@ -130,10 +127,10 @@
             $t("setting.options.whitelistCn")
           }}</option>
           <option value="gfwlist">{{ $t("setting.options.gfwlist") }}</option>
-          <!--          <option v-show="showTransparentModeRoutingPac" value="custom">{{-->
+          <!--          <option value="custom">{{-->
           <!--            $t("setting.options.customRouting")-->
           <!--          }}</option>-->
-          <option v-show="showRoutingA" value="routingA">RoutingA</option>
+          <option value="routingA">RoutingA</option>
         </b-select>
         <template v-if="pacMode === 'custom'">
           <b-button
@@ -154,7 +151,7 @@
         </template>
         <p></p>
       </b-field>
-      <b-field v-show="showAntipollution" label-position="on-border">
+      <b-field label-position="on-border">
         <template slot="label">
           {{ $t("setting.preventDnsSpoofing") }}
           <b-tooltip
@@ -171,9 +168,7 @@
           </b-tooltip>
         </template>
         <b-select v-model="antipollution" expanded class="left-border">
-          <option v-if="showAntipollutionClosed" value="closed">{{
-            $t("setting.options.closed")
-          }}</option>
+          <option value="closed">{{ $t("setting.options.closed") }}</option>
           <option value="none">{{
             $t("setting.options.antiDnsHijack")
           }}</option>
@@ -183,9 +178,7 @@
           <option v-show="showDoh" value="doh">{{
             $t("setting.options.doh")
           }}</option>
-          <option v-show="showAdvanced" value="advanced">{{
-            $t("setting.options.advanced")
-          }}</option>
+          <option value="advanced">{{ $t("setting.options.advanced") }}</option>
         </b-select>
         <b-button
           v-if="antipollution === 'advanced'"
@@ -330,7 +323,7 @@
       >
         <b-select v-model="proxyModeWhenSubscribe" expanded>
           <option value="direct">{{
-            transparent === "close"
+            transparent === "close" || lite
               ? $t("setting.options.direct")
               : $t("setting.options.dependTransparentMode")
           }}</option>
@@ -358,19 +351,18 @@
 </template>
 
 <script>
-import { handleResponse, isIntranet } from "@/assets/js/utils";
+import { handleResponse } from "@/assets/js/utils";
 import dayjs from "dayjs";
 import ModalCustomRouting from "@/components/modalCustomRouting";
 import ModalCustomRoutingA from "@/components/modalCustomRoutingA";
 import CusBInput from "./input/Input.vue";
-import { isVersionGreaterEqual, parseURL, toInt } from "../assets/js/utils";
+import { parseURL, toInt } from "@/assets/js/utils";
 import BButton from "buefy/src/components/button/Button";
 import BSelect from "buefy/src/components/select/Select";
 import BCheckboxButton from "buefy/src/components/checkbox/CheckboxButton";
-import modalPortWhiteList from "@/components/modalPortWhiteList";
 import modalDnsSetting from "./modalDnsSetting";
 import axios from "../plugins/axios";
-import { waitingConnected } from "../assets/js/networkInspect";
+import { waitingConnected } from "@/assets/js/networkInspect";
 
 export default {
   name: "ModalSetting",
@@ -383,6 +375,7 @@ export default {
     transparent: "close",
     transparentType: "redirect",
     ipforward: false,
+    portSharing: false,
     dnsForceMode: false,
     dnsforward: "no",
     antipollution: "none",
@@ -397,18 +390,15 @@ export default {
     serverListMode: "noSubscription",
     remoteGFWListVersion: "checking...",
     localGFWListVersion: "checking...",
-    showAntipollution: false,
-    showSpecialMode: false,
-    showTransparentType: false,
-    showAdvanced: false,
-    showDns: false,
-    showDoh: false,
-    showTransparentModeRoutingPac: false,
-    showRoutingA: false,
-    showAntipollutionClosed: false,
-    showDnsForceMode: false
+    showSpecialMode: true,
+    showDoh: false
   }),
   computed: {
+    lite() {
+      return (
+        window.localStorage["lite"] && parseInt(window.localStorage["lite"]) > 0
+      );
+    },
     dockerMode() {
       return window.localStorage["docker"] === "true";
     },
@@ -420,9 +410,6 @@ export default {
           U.protocol === "http" ? "80" : U.protocol === "https" ? "443" : "";
       }
       return toInt(port);
-    },
-    iptablesMode() {
-      return localStorage["iptablesMode"] || "tproxy";
     }
   },
   watch: {
@@ -451,60 +438,10 @@ export default {
           this.subscriptionAutoUpdateTime
         );
         this.pacAutoUpdateTime = new Date(this.pacAutoUpdateTime);
-        this.showAntipollution = isVersionGreaterEqual(
-          localStorage["version"],
-          "0.6.1"
-        );
-        this.showSpecialMode = isVersionGreaterEqual(
-          localStorage["version"],
-          "1.4.0"
-        );
-        this.showTransparentType = isVersionGreaterEqual(
-          localStorage["version"],
-          "1.4.0"
-        );
-        this.showAdvanced = isVersionGreaterEqual(
-          localStorage["version"],
-          "1.4.0"
-        );
-        this.showDoh =
-          isVersionGreaterEqual(localStorage["version"], "0.6.2") &&
-          localStorage["dohValid"] === "yes";
-        this.showDnsForceMode = isVersionGreaterEqual(
-          localStorage["version"],
-          "1.1.3"
-        );
-        this.showDns = isVersionGreaterEqual(
-          localStorage["version"],
-          "0.7.0.6"
-        );
-        this.showTransparentModeRoutingPac = isVersionGreaterEqual(
-          localStorage["version"],
-          "0.6.4"
-        );
-        this.showAntipollutionClosed = isVersionGreaterEqual(
-          localStorage["version"],
-          "0.7.0.2"
-        );
-        this.showRoutingA = isVersionGreaterEqual(
-          localStorage["version"],
-          "0.6.8"
-        );
-      });
-    });
-    //白名单有没有项，没有就post一下
-    this.$axios({
-      url: apiRoot + "/portWhiteList"
-    }).then(res => {
-      handleResponse(res, this, () => {
-        if (res.data.data.tcp === null && res.data.data.udp === null) {
-          this.$axios({
-            url: apiRoot + "/portWhiteList",
-            method: "post",
-            data: {
-              requestPort: this.v2rayaPort.toString()
-            }
-          });
+        this.showDoh = localStorage["dohValid"] === "yes";
+        if (this.lite) {
+          this.transparent = "close";
+          this.showSpecialMode = false;
         }
       });
     });
@@ -552,6 +489,7 @@ export default {
             transparent: this.transparent,
             transparentType: this.transparentType,
             ipforward: this.ipforward,
+            portSharing: this.portSharing,
             dnsforward: this.antipollution === "dnsforward" ? "yes" : "no", //版本兼容
             antipollution: this.antipollution,
             specialMode: this.specialMode
@@ -569,6 +507,15 @@ export default {
             });
             this.$parent.close();
           });
+          if (
+            res.data.code !== "SUCCESS" &&
+            res.data.message.indexOf("invalid config") >= 0
+          ) {
+            // FIXME: tricky
+            this.$parent.$parent.runningState.running = this.$t(
+              "common.notRunning"
+            );
+          }
         }),
         3 * 1000,
         cancel
@@ -591,42 +538,7 @@ export default {
         return;
       }
       console.log(apiRoot);
-      if (
-        this.transparent !== "close" &&
-        this.transparentType === "tproxy" &&
-        !isIntranet(apiRoot)
-      ) {
-        let U = parseURL(apiRoot);
-        let port = U.port;
-        if (!port) {
-          port =
-            U.protocol === "http" ? "80" : U.protocol === "https" ? "443" : "";
-        }
-        this.$axios({
-          url: apiRoot + "/portWhiteList"
-        })
-          .then(res => {
-            handleResponse(res, this, () => {
-              this.$buefy.dialog.confirm({
-                title: this.$t("common.message"),
-                message: this.$t("setting.messages.confirmEgressPorts", {
-                  tcpPorts: res.data.data.tcp.join(", "),
-                  udpPorts: res.data.data.udp.join(", ")
-                }),
-                cancelText: this.$t("operations.cancel"),
-                confirmText: this.$t("operations.confirm2"),
-                type: "is-danger",
-                onConfirm: () => this.requestUpdateSetting()
-              });
-            });
-          })
-          .catch(() => {
-            //可能是服务端是老旧版本，没这个接口
-            this.requestUpdateSetting();
-          });
-      } else {
-        this.requestUpdateSetting();
-      }
+      this.requestUpdateSetting();
     },
     handleClickConfigurePac() {
       this.$buefy.modal.open({
@@ -640,22 +552,6 @@ export default {
       this.$buefy.modal.open({
         parent: this,
         component: ModalCustomRoutingA,
-        hasModalCard: true,
-        canCancel: true
-      });
-    },
-    handleClickPortWhiteList() {
-      this.$buefy.modal.open({
-        parent: this,
-        component: modalPortWhiteList,
-        hasModalCard: true,
-        canCancel: true
-      });
-    },
-    handleClickDohSetting() {
-      this.$buefy.modal.open({
-        parent: this,
-        component: modalDohSetting,
         hasModalCard: true,
         canCancel: true
       });
